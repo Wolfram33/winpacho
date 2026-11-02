@@ -436,9 +436,11 @@ $REQUIRED_EXT = @('pdo_sqlite', 'sqlite3', 'fileinfo', 'curl', 'mbstring', 'gd',
 # Expected PHP version per folder, from the module packaging ("PHP 8.4.27 (php84)").
 # Apache must run exactly this version: a php8x folder without a freshly
 # packaged module (like the base package's 8.3.0 before 1.3.16) fails here.
+# The suffix of a windows.php.net version ("PHP 8.3.36-1 (php83)") is not kept:
+# the smoke test accepts PHP_VERSION with or without it.
 $expectedPhp = @{}
 Get-ChildItem -Path 'artifacts' -Recurse -Filter 'module-versions.txt' | Get-Content |
-  ForEach-Object { if ($_ -match '^PHP (\d+\.\d+\.\d+) \((php\d+)\)') { $expectedPhp[$Matches[2]] = $Matches[1] } }
+  ForEach-Object { if ($_ -match '^PHP (\d+\.\d+\.\d+)(?:-\d+)? \((php\d+)\)') { $expectedPhp[$Matches[2]] = $Matches[1] } }
 
 # Probe page: prints a marker, the OPcache switch and the loaded extensions
 @'
@@ -480,7 +482,7 @@ foreach ($ver in $versions) {
   if ($text -match '<\?php') { throw "Smoke test ($ver): PHP served as source instead of executing" }
   if ($text -notmatch 'USR-PROBE') { throw "Smoke test ($ver): Apache did not serve the PHP probe" }
   if (-not $expectedPhp.ContainsKey($ver)) { throw "Smoke test ($ver): no packaged module for this PHP folder (stale PHP from the base package?)" }
-  if ($text -notmatch ('USR-PROBE ' + [regex]::Escape($expectedPhp[$ver]) + ' ')) {
+  if ($text -notmatch ('USR-PROBE ' + [regex]::Escape($expectedPhp[$ver]) + '(?:-\d+)? ')) {
     throw "Smoke test ($ver): Apache runs a different PHP than the packaged $($expectedPhp[$ver]): $($text.Substring(0, [Math]::Min(40, $text.Length)))"
   }
   if ($text -notmatch ' OPC:1 ') { throw "Smoke test ($ver): opcache.enable is not 1" }

@@ -28,6 +28,12 @@ function Get-Json([string]$url, [hashtable]$headers = $UA) {
   Invoke-RestMethod -Uri $url -Headers $headers -TimeoutSec $TIMEOUT_SEC
 }
 
+# windows.php.net can publish a version with a suffix (8.3.36-1), which [version]
+# rejects. As a fourth part it sorts after 8.3.36 and before 8.3.37.
+function ConvertTo-Version([string]$v) {
+  [version]($v -replace '-(\d+)$', '.$1')
+}
+
 # --- Shipped versions: "Packaged component versions" list of the latest release
 $apiHeaders = $UA.Clone()
 if ($env:GITHUB_TOKEN) { $apiHeaders['Authorization'] = "Bearer $env:GITHUB_TOKEN" }
@@ -40,9 +46,9 @@ function Get-Shipped([string]$pattern) {
 }
 $shipped = [ordered]@{
   'Apache'      = Get-Shipped 'Apache (\d+\.\d+\.\d+) \(bundle\)'
-  'PHP 8.3'     = Get-Shipped 'PHP (\d+\.\d+\.\d+) \(php83\)'
-  'PHP 8.4'     = Get-Shipped 'PHP (\d+\.\d+\.\d+) \(php84\)'
-  'PHP 8.5'     = Get-Shipped 'PHP (\d+\.\d+\.\d+) \(php85\)'
+  'PHP 8.3'     = Get-Shipped 'PHP (\d+\.\d+\.\d+(?:-\d+)?) \(php83\)'
+  'PHP 8.4'     = Get-Shipped 'PHP (\d+\.\d+\.\d+(?:-\d+)?) \(php84\)'
+  'PHP 8.5'     = Get-Shipped 'PHP (\d+\.\d+\.\d+(?:-\d+)?) \(php85\)'
   'MariaDB'     = Get-Shipped 'MariaDB (\d+\.\d+\.\d+) \(bundle\)'
   'Adminer'     = Get-Shipped 'Adminer (\d+\.\d+\.\d+) \(bundle\)'
 }
@@ -100,7 +106,11 @@ foreach ($name in $shipped.Keys) {
   if (-not $have -and $name -in $sinceLaterRelease) { $state = 'not shipped in this release yet' }
   elseif (-not $have) { $state = 'not in release notes'; $errors += "$name`: shipped version not found in release $($release.tag_name)" }
   elseif (-not $new) { $state = 'check failed' }
-  elseif ([version]$new -gt [version]$have) { $state = 'UPDATE AVAILABLE'; $updates++ }
+  else {
+    # Uncaught, this would exit 1 and read as "updates available"
+    try { if ((ConvertTo-Version $new) -gt (ConvertTo-Version $have)) { $state = 'UPDATE AVAILABLE'; $updates++ } }
+    catch { $state = 'check failed'; $errors += "$name`: cannot compare versions '$have' and '$new'" }
+  }
   $rows += [pscustomobject]@{ Component = $name; Shipped = $have; Upstream = $new; State = $state }
 }
 
