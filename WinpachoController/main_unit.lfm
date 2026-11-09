@@ -2611,6 +2611,14 @@ object Main: TMain
           ImageIndex = 32
           OnClick = MMSS_apache_delete_vhostClick
         end
+        object MMSS_apache_export_vhosts: TMenuItem
+          Caption = 'Export Vhosts (save list for a new winpacho version)...'
+          OnClick = MMSS_apache_export_vhostsClick
+        end
+        object MMSS_apache_import_vhosts: TMenuItem
+          Caption = 'Import Vhosts (restore from an exported list)...'
+          OnClick = MMSS_apache_import_vhostsClick
+        end
       end
       object MenuItem8_spacer: TMenuItem
         Caption = '-'

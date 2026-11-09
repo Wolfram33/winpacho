@@ -9,7 +9,7 @@ uses
   Interfaces, // this includes the LCL widgetset
   Forms, main_unit, default_config_vars, us_common_procedures,
   us_common_functions, about_form, us_server_state, server_cert_key_gen_form,
-  vhost_create_form, vhost_delete_form, apache_modules_form, apache_basic_form,
+  vhost_create_form, vhost_delete_form, vhost_config, apache_modules_form, apache_basic_form,
   root_www_pass_access_form, root_ssl_pass_access_form, php_extensions_form,
   edit_php_basic_form, msmtp_php_mail_form, are_servers_runable, httpsend,
   pc_win_startup_form, cron_form,

@@ -73,6 +73,7 @@ function us_start_mysql_skip_grants():boolean;                // Start MySQL no 
 
 //=== USER INPUT VALIDATION ===
 function valid_root_folder_name(root_folder_name:string;display_str:string): boolean;
+function us_is_valid_root_folder_name(const root_folder_name:string): boolean; // Same format check, silent
 function valid_server_name(server_name:string;display_str:string): boolean;
 function us_vhost_tld_hint(server_name:string): string;                       // Browser hint for the host name ending ('' = fine)
 function valid_server_port(server_port:string;display_str:string): boolean;
@@ -1514,7 +1515,7 @@ function valid_root_folder_name(root_folder_name:string;display_str:string): boo
   //-- Check folder name looks resonable e.g fred.com
   If valid_input Then
     begin
-     If Not ExecRegExpr('^[a-zA-Z0-9]+[a-zA-Z0-9\-_]*$', root_folder_name) Then
+     If Not us_is_valid_root_folder_name(root_folder_name) Then
        begin
          valid_input := False;
          SysUtils.Beep; // Alert user
@@ -1523,6 +1524,12 @@ function valid_root_folder_name(root_folder_name:string;display_str:string): boo
     end;
 
   valid_root_folder_name := valid_input;
+end;
+
+{ Portable vhost folder name under vhosts\: letters, digits, - and _ }
+function us_is_valid_root_folder_name(const root_folder_name:string): boolean;
+begin
+  Result := ExecRegExpr('^[a-zA-Z0-9]+[a-zA-Z0-9\-_]*$', root_folder_name);
 end;
 {---End valid_root_folder_name ----------------------------------------------}
 

@@ -26,6 +26,7 @@ uses
   server_cert_key_gen_form,
   vhost_create_form,
   vhost_delete_form,
+  vhost_config,
   apache_basic_form,
   apache_modules_form,
   root_www_pass_access_form,
@@ -156,6 +157,8 @@ type
     MMS_apache_vhosts: TMenuItem;
     MMSS_apache_delete_vhost: TMenuItem;
     MMSS_apache_add_vhost: TMenuItem;
+    MMSS_apache_export_vhosts: TMenuItem;
+    MMSS_apache_import_vhosts: TMenuItem;
     MenuItem9_spacer: TMenuItem;
     MMSS_enable_disable_ssl: TMenuItem;
     MMS_apache_ssl: TMenuItem;
@@ -236,6 +239,8 @@ type
     procedure MMSS_apache_add_vhostClick(Sender: TObject);
     procedure MMSS_apache_delete_all_logsClick(Sender: TObject);
     procedure MMSS_apache_delete_vhostClick(Sender: TObject);
+    procedure MMSS_apache_export_vhostsClick(Sender: TObject);
+    procedure MMSS_apache_import_vhostsClick(Sender: TObject);
     procedure MMSS_apache_edit_basicClick(Sender: TObject);
     procedure MMSS_apache_edit_httpd_confClick(Sender: TObject);
     procedure MMSS_apache_edit_modulesClick(Sender: TObject);
@@ -1228,6 +1233,16 @@ end;
 procedure TMain.MMSS_apache_delete_vhostClick(Sender: TObject);
 begin
      vhost_delete.ShowModal; //Display orm
+end;
+
+procedure TMain.MMSS_apache_export_vhostsClick(Sender: TObject);
+begin
+  us_export_vhosts;  // List of host name + folder, for a new winpacho version
+end;
+
+procedure TMain.MMSS_apache_import_vhostsClick(Sender: TObject);
+begin
+  us_import_vhosts;  // Rebuild the vhosts from an exported list
 end;
 
 procedure TMain.MMSS_apache_edit_basicClick(Sender: TObject);

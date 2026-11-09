@@ -16,7 +16,7 @@ uses
   default_config_vars,
   us_common_procedures,
   us_common_functions,
-  RegExpr;
+  vhost_config;
 
 type
 
@@ -53,121 +53,6 @@ implementation
 
 {$R *.lfm}
 
-{===============================================================
-Add Vhost block to Vhost configuration file:
-Input In_RootFolder
-Input In_ServerName
-
-==File httpd-vhosts.conf:
- 1) Check file exists
- 2) Check for existing Vhost section
- 3) Add new Vhost section
- 4) Remove duplicated blank lines
- 5) Save file
-
-----------------------------------------------------------------}
-procedure add_vhost_block(In_DocRoot:String;In_DirPath:String;In_ServerName:String);
-var
- vhost_found :boolean;     // Vhost section found
- sList       :TStringList; // String list
- i           :integer;     // Loop counteri
-begin
-  vhost_found     := False;                 // Assume no vhost section
-
-  If FileExists(USF_APACHE_VHOST_CNF) Then   // Check file exists
-  begin
-   sList  := TStringList.Create;             // Create object
-   sList.LoadFromFile(USF_APACHE_VHOST_CNF); // Load Apache Vhost config file
-
-   for i:=0 to sList.Count-1 do
-     begin
-        //-- Check section not present
-        If (sList[i]<>'') and ExecRegExpr('^\s*ServerName\s*'+In_ServerName, sList[i]) Then
-         begin
-           vhost_found := True; //Already contains the new Vhost section
-           break;               //Nothing else to do
-          end;
-      end;//End scan new list
-
-   //--Add new section
-   //  In_DocRoot - DocumentRoot value (portable ${US_ROOTF}/vhosts/name or an
-   //               absolute path like D:/projects/app)
-   //  In_DirPath - matching <Directory> path (Windows-style backslashes)
-   If Not vhost_found Then
-     begin
-       sList.Add('');
-       sList.Add('<VirtualHost *:${AP_PORT}>');
-       sList.Add(' ServerAdmin webmaster@'+In_ServerName);
-       sList.Add(' DocumentRoot "'+In_DocRoot+'"');  // quoted: the path may contain spaces
-       sList.Add(' ServerName '+ In_ServerName);
-       sList.Add(' ServerAlias www.'+IN_ServerName+ ' *.'+In_ServerName);
-       //-- One rotated error log per vhost, shared by the http and the https
-       //   block below (Apache runs one writer per identical ErrorLog pipe,
-       //   but one per CustomLog line - so the vhost gets no access log of
-       //   its own: its requests go to logs/access.log tagged host:port,
-       //   vhost_combined format). Same scheme as scripts/tune-server-config.ps1;
-       //   rotatelogs_z.exe is the windowless copy us_prepare_rotatelogs
-       //   creates at Apache start.
-       sList.Add(' ErrorLog "|bin/rotatelogs_z.exe -n 5 -D -L logs/'+In_ServerName+'-error.log logs/rotated/'+In_ServerName+'-error.log 10M"');
-       sList.Add(' # Access lines of this host go to logs/access.log, tagged "host:port" (vhost_combined)');
-       sList.Add(' <Directory "'+In_DirPath+'">');
-       sList.Add('   Options Indexes Includes FollowSymLinks');
-       sList.Add('   AllowOverride All   ');
-       sList.Add('   Require all granted ');
-       sList.Add(' </Directory> ');
-       sList.Add('</VirtualHost> ');
-       sList.Add('');
-       //-- Matching SSL vhost on the SSL port (https://<domain>).
-       //   Wrapped in IfModule so the file also parses when SSL is disabled.
-       //   Uses the shared server certificate, which the controller rebuilds
-       //   to cover every vhost domain (subjectAltName).
-       sList.Add('<IfModule ssl_module>');
-       sList.Add('<VirtualHost *:${AP_SSL_PORT}>');
-       sList.Add(' ServerAdmin webmaster@'+In_ServerName);
-       sList.Add(' DocumentRoot "'+In_DocRoot+'"');  // quoted: the path may contain spaces
-       sList.Add(' ServerName '+ In_ServerName);
-       sList.Add(' ServerAlias www.'+IN_ServerName+ ' *.'+In_ServerName);
-       sList.Add(' ErrorLog "|bin/rotatelogs_z.exe -n 5 -D -L logs/'+In_ServerName+'-error.log logs/rotated/'+In_ServerName+'-error.log 10M"');
-       sList.Add(' # Access lines of this host go to logs/access.log, tagged "host:port" (vhost_combined)');
-       sList.Add(' SSLEngine on');
-       sList.Add(' SSLCertificateFile "${US_ROOTF}/core/apache2/server_certs/server.crt"');
-       sList.Add(' SSLCertificateKeyFile "${US_ROOTF}/core/apache2/server_certs/server.key"');
-       sList.Add(' <Directory "'+In_DirPath+'">');
-       sList.Add('   Options Indexes Includes FollowSymLinks');
-       sList.Add('   AllowOverride All   ');
-       sList.Add('   Require all granted ');
-       sList.Add(' </Directory> ');
-       sList.Add('</VirtualHost>');
-       sList.Add('</IfModule>');
-       sList.Add('');
-
-       //==Clean file list
-
-       //Remove all blank lines
-       for i:=sList.Count-1 downto 0 do
-         If sList[i]='' Then
-           sList.Delete(i); //Delete entery
-
-       //Insert blank line above start of each Vhost block
-       for i:=sList.Count-1 downto 0 do
-         begin
-           //-- Get Start of Vhost
-           If (sList[i]<>'') and ExecRegExpr('^\s*<VirtualHost\s', sList[i]) Then
-              sList.Insert(i,''); // Insert blank line
-         end;
-
-       //Save new Vhost file
-       If FileIsWritable(USF_APACHE_VHOST_CNF) Then
-          sList.SaveToFile(USF_APACHE_VHOST_CNF); // Save Vhost file
-
-     end;
-
-   //Clean up
-   sList.Free;      // Remove from memory
-  end;//End Enable Vhost
-end;
-{--------------------------------------------------------------}
-
 { Tvhost_create }
 
 procedure Tvhost_create.Btn_create_vhostClick(Sender: TObject);
@@ -183,12 +68,13 @@ var
    doc_root_conf   :string;      // DocumentRoot value written to config
    dir_path_conf   :string;      // <Directory> path written to config
    is_external     :boolean;     // True when an absolute path was given
-   sList           :TStringList; // String list
    valid_input     :boolean;     // Valid data from user
-   i               :integer;     // Loop counter
    tld_hint        :string;      // Browser hint for an unusual host name ending
+   include_ok      :boolean;     // httpd.conf loads httpd-vhosts.conf
 begin
    new_root_path   :='';
+   doc_root_conf   :='';
+   dir_path_conf   :='';
    new_root_input  := Trim(Edit_root_folder.Text); // Get root-folder/path entered
    new_ServerName  := Edit_server_name.Text;       // Get server name entered
 
@@ -231,9 +117,7 @@ begin
       Else
         begin
           // Portable name under vhosts\  (keeps ${US_ROOTF}/${HOME} tokens)
-          new_root_path := UniConPath+'\vhosts\'+new_root_input;
-          doc_root_conf := '${US_ROOTF}/vhosts/'+new_root_input;
-          dir_path_conf := '${HOME}\vhosts\'+new_root_input;
+          us_vhost_portable_conf(new_root_input, doc_root_conf, dir_path_conf, new_root_path);
         end;
     end;
 
@@ -241,48 +125,28 @@ begin
   If valid_input Then
    begin
 
-    //==File httpd.conf enable Vhost include section:
-    If FileExists(USF_APACHE_CNF) Then       // Check file exists
-    begin
-     sList  := TStringList.Create;           // Create object
-     sList.LoadFromFile(USF_APACHE_CNF);     // Load Apache main config file
+    include_ok := us_enable_vhost_include;   // httpd.conf: activate the vhosts Include
 
-     for i:=0 to sList.Count-1 do
-       begin
-          //-- Check section not enabled
-          If (sList[i]<>'') and ExecRegExpr('^\s*#\s*Include\s*conf/extra/httpd-vhosts.conf', sList[i]) Then
-           begin
-             sList[i] := 'Include conf/extra/httpd-vhosts.conf'; // Enabled line (section)
-             //Save updated file
-             If FileIsWritable(USF_APACHE_CNF) Then
-                sList.SaveToFile(USF_APACHE_CNF);     // Save new values to file
-
-              sleep(100);
-              break; //Nothing else to do
-            end;
-        end;//End scan new list
-
-     //Clean up
-     sList.Free;      // Remove from memory
-    end;//End Enable Vhost
-
-    //== Create new document root folder (portable mode only; an external
-    //   folder is used as-is and its existing contents are left untouched)
-    If (Not is_external) And (Not DirectoryExists(new_root_path)) Then
-       ForceDirectories(new_root_path);   // If directory does not exist create it
-
-    //== Seed helper files only for a freshly created portable root
-    If Not is_external Then
+    //== Portable mode only: create the folder under vhosts\ and seed it. An
+    //   external folder is used as-is and its contents are left untouched.
+    If (Not is_external) and (Not us_seed_portable_vhost_folder(new_root_path)) Then
       begin
-        If not FileExists(new_root_path+'\.htaccess') then
-           CopyFile(USF_VHOST_HTACCESS, new_root_path+'\.htaccess'); // .htaccess file for new Vhost
-
-        If not FileExists(new_root_path+'\favicon.ico') then
-           CopyFile(USF_VHOST_ICO,new_root_path+'\favicon.ico'); // favicon image for new Vhost
+        us_MessageDlg('Vhost not created',
+          'The folder could not be created:' + sLineBreak + new_root_path + sLineBreak + sLineBreak +
+          'Check that winpacho may write to its vhosts folder (not read-only,' + sLineBreak +
+          'enough disk space), or pick an existing folder with Browse.', mtError,[mbOk],0);
+        Exit;
       end;
 
      //===Add new block to Vhost configuration file
-     add_vhost_block(doc_root_conf,dir_path_conf,new_ServerName); // Add new Vhost to configuration file
+     If Not us_add_vhost_block(doc_root_conf,dir_path_conf,new_ServerName) Then
+       begin
+         us_MessageDlg('Vhost not created',
+           'The Vhost could not be written to' + sLineBreak + USF_APACHE_VHOST_CNF + sLineBreak + sLineBreak +
+           'Close any editor that has the file open, check that it is not' + sLineBreak +
+           'read-only, then click Create again.', mtError,[mbOk],0);
+         Exit;
+       end;
 
      //===Add to Uniform Server PAC file
      us_add_to_pac_file(new_ServerName);                     // Add new host to PAC file
@@ -294,21 +158,11 @@ begin
      //   (and every other) vhost domain -> https://<domain> works too.
      us_regenerate_cert_for_all_vhosts;
 
-     //Proactively offer to trust the rebuilt certificate: it changed, so the
-     //previous trust no longer covers it - browsers would warn again.
-     If us_MessageDlg('Vhost created - trust certificate?',
-       'New Vhost created for ' + new_ServerName + '.' + sLineBreak + sLineBreak +
-       'HTTPS is set up: the server certificate was rebuilt so it also' + sLineBreak +
-       'covers this domain. Browsers only drop their warning after the' + sLineBreak +
-       'rebuilt certificate is trusted again.' + sLineBreak + sLineBreak +
-       'Trust the rebuilt certificate in Windows now?' + sLineBreak +
-       '(Afterwards restart your browser completely. Also available' + sLineBreak +
-       'later: Apache > Apache SSL > Trust certificate in Windows.)',
-       mtConfirmation,[mbYes,mbNo],0) = mrYes Then
-         us_trust_ssl_cert;
+     us_offer_vhost_cert_trust('New Vhost created for ' + new_ServerName + '.');
 
      tld_hint := us_vhost_tld_hint(new_ServerName);
      If tld_hint <> '' Then tld_hint := sLineBreak + sLineBreak + 'Note: ' + tld_hint;
+     If Not include_ok Then tld_hint := tld_hint + sLineBreak + sLineBreak + us_vhost_include_warning;
      us_MessageDlg('Apache Info',
        'Restart Apache for the new Vhost to take effect.' + tld_hint,
        mtInformation,[mbOk],0) ; //Display information message

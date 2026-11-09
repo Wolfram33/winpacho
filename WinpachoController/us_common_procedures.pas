@@ -114,6 +114,8 @@ procedure us_proxy_file_port_update(old_port:string;new_port:string); //Update P
 procedure us_launch_edit_hosts_utility;            // Launches - Uniform Server Windows hosts file utility
 function  us_hosts_file_path:string;               // Full path of the Windows hosts file
 procedure us_add_to_hosts_file(host:string);       // Add new host - domain name/IP to hosts file
+procedure us_add_many_to_hosts_file(hosts:TStrings); // Same for several hosts, one write (one UAC prompt)
+function  us_is_valid_hostname(const h:string): boolean; // Plain host name: letters/digits/dot/hyphen
 procedure us_delete_from_hosts_file(host:string);  // Remove host  - domain name/IP from hosts file
 
 //===END===
@@ -3405,35 +3407,63 @@ us_add_to_hosts_file
 =============================================================================}
 procedure us_add_to_hosts_file(host:string);
 var
-  sList :TStringList;
+  hosts :TStringList;
+begin
+ hosts := TStringList.Create;
+ try
+   hosts.Add(host);
+   us_add_many_to_hosts_file(hosts);
+ finally
+   hosts.Free;
+ end;
+end;
+
+{ Several hosts in one write - the Vhost import would otherwise raise one
+  UAC prompt per host. }
+procedure us_add_many_to_hosts_file(hosts:TStrings);
+var
+  sList, added, missing :TStringList;
+  i     :integer;
   str   :string;
 begin
  If Not USC_EditHostsFileEnabled Then Exit;   // User disabled hosts file editing
- If Not us_is_valid_hostname(host) Then Exit; // Never write invalid names
- If us_hosts_has_entry(host) Then Exit;       // Already resolves - nothing to do
 
- sList := TStringList.Create;
+ added   := TStringList.Create;
+ missing := TStringList.Create;
+ sList   := TStringList.Create;
  try
+   for i:=0 to hosts.Count-1 do
+     If us_is_valid_hostname(hosts[i])                 // Never write invalid names
+        and Not us_hosts_has_entry(hosts[i])           // Already resolves - nothing to do
+        and (added.IndexOf(hosts[i]) < 0) Then
+       added.Add(hosts[i]);
+   If added.Count = 0 Then Exit;
+
    If FileExists(us_hosts_file_path) Then
      sList.LoadFromFile(us_hosts_file_path);
-   sList.Add('127.0.0.1'+#9+host+#9+'# winpacho vhost');
+   for i:=0 to added.Count-1 do
+     sList.Add('127.0.0.1'+#9+added[i]+#9+'# winpacho vhost');
    us_write_hosts_file(sList);
+
+   //--Verify: without the entry the host name will not resolve in a browser
+   for i:=0 to added.Count-1 do
+     If Not us_hosts_has_entry(added[i]) Then missing.Add(added[i]);
+   If missing.Count = 0 Then Exit;
+
+   str :=       'The Windows hosts file entries for these names could not be' + sLineBreak;
+   str := str + 'written - this needs administrator rights and the Windows'   + sLineBreak;
+   str := str + 'prompt may have been declined:'                              + sLineBreak;
+   for i:=0 to missing.Count-1 do str := str + '   ' + missing[i]            + sLineBreak;
+   str := str + sLineBreak + 'Without an entry http://<name> will not resolve.' + sLineBreak + sLineBreak;
+   str := str + 'Fix: add one line per name to '+us_hosts_file_path+','     + sLineBreak;
+   str := str + 'e.g. 127.0.0.1   '+missing[0]                               + sLineBreak;
+   str := str + 'or use menu: Extra > Edit Win hosts file.';
+   us_MessageDlg('Hosts file entry missing', str, mtWarning,[mbOk],0);
  finally
    sList.Free;
+   missing.Free;
+   added.Free;
  end;
-
- //--Verify: without the entry the host name will not resolve in a browser
- If Not us_hosts_has_entry(host) Then
-  begin
-    str :=       'The Windows hosts file entry for "'+host+'" could not be'    + sLineBreak;
-    str := str + 'written - this needs administrator rights and the Windows'   + sLineBreak;
-    str := str + 'prompt may have been declined.'                              + sLineBreak + sLineBreak;
-    str := str + 'Without the entry http://'+host+' will not resolve.'         + sLineBreak + sLineBreak;
-    str := str + 'Fix: add this line to '+us_hosts_file_path+':'               + sLineBreak;
-    str := str + '127.0.0.1   '+host                                           + sLineBreak;
-    str := str + 'or use menu: Extra > Edit Win hosts file.';
-    us_MessageDlg('Hosts file entry missing', str, mtWarning,[mbOk],0);
-  end;
 end;
 {--- End us_add_to_hosts_file ------------------------------------------------}
 
