@@ -91,7 +91,7 @@ if (!ctype_digit((string)$server_port) || (int)$server_port < 1 || 65535 < (int)
       <h2>Server links</h2>
       <ul class="link-list">
         <li><a href="http://<?php echo(us_h($server_name).':'.us_h($server_port)) ?>/us_splash/index.php" target="_blank">Splash page</a> - Displays server specification and useful links.</li>
-        <li><a href="http://<?php echo(us_h($server_name).':'.us_h($server_port)) ?>/us_opt1/index.php" target="_blank">Adminer</a> - Database administration (MariaDB and SQLite, this computer only).</li>
+        <li><a href="http://<?php echo(us_h($server_name).':'.us_h($server_port)) ?>/us_opt1/index.php" target="_blank">Adminer</a> - Database administration (MariaDB or MySQL, and SQLite, this computer only).</li>
         <li><a href="http://<?php echo(us_h($server_name).':'.us_h($server_port)) ?>/us_extra/phpinfo.php" target="_blank">PHP Info</a> - Active PHP configuration.</li>
       </ul>
     </section>

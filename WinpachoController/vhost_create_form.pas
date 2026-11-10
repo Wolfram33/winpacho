@@ -78,7 +78,7 @@ begin
    new_root_input  := Trim(Edit_root_folder.Text); // Get root-folder/path entered
    new_ServerName  := Edit_server_name.Text;       // Get server name entered
 
-   valid_input := True;    // Assume input is invalid
+   valid_input := True;    // Assume input is valid; every failed check below clears it
 
    // An absolute path (drive letter or UNC) means "use this folder directly"
    is_external := (Length(new_root_input) >= 2) and

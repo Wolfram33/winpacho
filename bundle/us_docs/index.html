@@ -102,7 +102,7 @@
       <ol class="steps">
         <li>Download <b>winpacho.zip</b> from the <a href="https://github.com/Wolfram33/winpacho/releases/tag/latest">releases page</a>.</li>
         <li>Extract it into an empty folder (no spaces in the path, not under <code>C:\Program Files</code>), e.g. <code>C:\winpacho</code>. The server files land directly in it.</li>
-        <li>Start <code>WinpachoController.exe</code> from that folder, then click <b>Start Apache</b> and <b>Start MariaDB</b>.</li>
+        <li>Start <code>WinpachoController.exe</code> from that folder, choose the database engine (MariaDB or MySQL) and the window look, then click <b>Start Apache</b> and <b>Start MariaDB</b> (or <b>Start MySQL</b>).</li>
         <li>Put your site into the <code>www</code> subfolder — or point a Vhost straight at your project folder (see <a href="#vhosts">Virtual hosts</a>).</li>
       </ol>
       <div class="note">Everything below is preconfigured. This page describes the fork; the original ZeroXV reference manual is linked at the bottom.</div>
@@ -147,26 +147,27 @@
 
     <section id="db">
       <h2><span class="ico">🗄️</span> Databases</h2>
-      <p><b>MariaDB</b> is the database engine (since 1.3.6, the only one since 2.2.0): the long-term-support release with the longest remaining support, see the splash page for the exact version. It lives in <code>core\mysql</code> and answers on port 3306, so apps with <code>mysqli</code>/PDO and the controller menus work as with MySQL. <b>SQLite</b> needs no server: PHP's <code>sqlite3</code> and <code>pdo_sqlite</code> are on in every PHP version.</p>
+      <p>Two engines ship ready to run (since 2.4.0): <b>MariaDB</b> (active after unpacking; the long-term-support release with the longest remaining support) and <b>MySQL 8.4 LTS</b> (on standby in <code>core\db_standby\mysql</code>); the splash page shows the exact versions. The active one lives in <code>core\mysql</code> and answers on port 3306, so apps with <code>mysqli</code>/PDO work with either. Switch with the last entry of the database menu, <b>Switch database engine to ...</b> (database stopped). Each engine keeps its own databases, users and root password; data moves between them as dumps (<b>Database backup</b>, switch, <b>Database restore</b>). Choose MySQL when the live server of your app runs MySQL or the app needs MySQL-only features such as the binary JSON type. <b>SQLite</b> needs no server: PHP's <code>sqlite3</code> and <code>pdo_sqlite</code> are on in every PHP version.</p>
       <div class="grid">
-        <div class="card"><b>Admin</b><b>Adminer</b> via the <b>Adminer</b> button (needs Apache running). It logs in to MariaDB as <code>root</code> by itself and answers on this computer only.</div>
+        <div class="card"><b>Admin</b><b>Adminer</b> via the <b>Adminer</b> button (needs Apache running). It logs in to the active engine as <code>root</code> by itself and answers on this computer only.</div>
         <div class="card"><b>Host</b>Use <code>127.0.0.1</code> as the DB host in your apps (not <code>localhost</code>) for a reliable IPv4 connection.</div>
-        <div class="card"><b>Hot backups</b><code>core\mysql\bin\mariadb-backup.exe --backup --target-dir=...</code> copies a running server without locking it.</div>
-        <div class="card"><b>Root password</b>Default <code>root</code>. Change it via <b>MariaDB &gt; Change MariaDB password</b>; Adminer picks up the new one by itself.</div>
+        <div class="card"><b>Hot backups</b>MariaDB: <code>core\mysql\bin\mariadb-backup.exe --backup --target-dir=...</code> copies a running server without locking it.</div>
+        <div class="card"><b>Root password</b>Default <code>root</code>. Change it via <b>MariaDB &gt; Change MariaDB root password</b> (MySQL: the same in its menu); Adminer picks up the new one by itself.</div>
       </div>
       <h3 id="sqlite">SQLite files in Adminer</h3>
       <ol class="steps">
         <li>Click <b>Adminer</b>, then <b>Logout</b> (top right) to get to the login form.</li>
         <li>System: <b>SQLite</b>. Database: the full path of the file, e.g. <code>C:\winpacho\www\app\data.sqlite</code>. Username: leave empty.</li>
-        <li>Password: the <b>MariaDB root password</b> (default <code>root</code>). SQLite has no passwords of its own, so Adminer checks this one before it opens a file.</li>
+        <li>Password: the <b>root password of the active engine</b> (default <code>root</code>). SQLite has no passwords of its own, so Adminer checks this one before it opens a file.</li>
       </ol>
-      <h3 id="mysql">Still running MySQL?</h3>
-      <p>Bundles up to 1.3.5 ran MySQL 8.2, and up to 2.1.x MySQL 8.4 was available as a module. Since 2.2.0 winpacho supports MariaDB only; the controller says so at every start of a MySQL installation. The two engines cannot read each other's data folder, so the data moves as dumps:</p>
-      <ol class="steps">
+      <h3 id="mysql">Installations from before 2.4.0</h3>
+      <p><b>Add MySQL</b> to a MariaDB installation: close the controller, copy <code>WinpachoController.exe</code> and the folder <code>core\db_standby</code> from the new bundle into the server folder; the database menu then offers the switch.</p>
+      <p><b>Still running an old MySQL</b> (bundles up to 1.3.5, or the MySQL module up to 2.1.x)? It keeps working. For the tuned engines of the current bundle move the data as dumps:</p>
+      <ol>
         <li>Export the databases you need: <b>MySQL &gt; Database backup</b> (or <code>core\mysql\bin\mysqldump.exe</code>).</li>
-        <li>Stop MySQL and delete the folder <code>core\mysql</code> <b>completely</b> - a mix of both engines' files corrupts the data folder.</li>
-        <li>Unzip <code>winpacho_mariadb_module.zip</code> from the <a href="https://github.com/Wolfram33/winpacho/releases/tag/latest">releases page</a> into the server folder (the folder with <code>WinpachoController.exe</code>). It brings a fresh <code>core\mysql</code> with root password <code>root</code>.</li>
-        <li>Restart the controller - the menus now say <b>MariaDB</b> - and import the dumps via <b>MariaDB &gt; Database restore</b>. Recreate restricted users (<b>MariaDB &gt; Create restricted MariaDB user</b>); single-database dumps do not carry them.</li>
+        <li>Stop MySQL and move the folder <code>core\mysql</code> out of the server folder - a mix of two engines' files corrupts the data folder.</li>
+        <li>Copy <code>core\mysql</code> and <code>core\db_standby</code> from the new bundle into the server folder (the folder with <code>WinpachoController.exe</code>) and switch to the engine you want.</li>
+        <li>Import the dumps via <b>Database restore</b>. Recreate restricted users (<b>Create restricted user</b>); single-database dumps do not carry them.</li>
       </ol>
     </section>
 
@@ -178,7 +179,7 @@
 
     <section id="tuning">
       <h2><span class="ico">⚙️</span> Development limits</h2>
-      <p>Sensible defaults for development machines — all editable via <b>PHP &gt; Edit selected configuration file</b> and <code>core\mysql\my.ini</code> (the MariaDB configuration).</p>
+      <p>Sensible defaults for development machines — all editable via <b>PHP &gt; Edit selected configuration file</b> and <code>core\mysql\my.ini</code> (the configuration of the active engine).</p>
       <table>
         <tr><th>Setting</th><th>Value</th></tr>
         <tr><td>PHP <code>memory_limit</code></td><td>512M</td></tr>

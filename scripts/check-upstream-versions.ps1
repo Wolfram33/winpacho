@@ -3,7 +3,7 @@
 # a non-zero exit (= failed run, GitHub sends a mail) means: build a new
 # release. Locally: pwsh scripts/check-upstream-versions.ps1
 #
-# The build scripts already fetch the newest PHP/MariaDB/Adminer/Apache, so a
+# The build scripts already fetch the newest PHP/MariaDB/MySQL/Adminer/Apache, so a
 # version bump + tag is normally all an update takes. Only for Apache the
 # patch-level floor $MinApachePatch in build-bundle.ps1 should be raised too.
 #
@@ -50,11 +50,12 @@ $shipped = [ordered]@{
   'PHP 8.4'     = Get-Shipped 'PHP (\d+\.\d+\.\d+(?:-\d+)?) \(php84\)'
   'PHP 8.5'     = Get-Shipped 'PHP (\d+\.\d+\.\d+(?:-\d+)?) \(php85\)'
   'MariaDB'     = Get-Shipped 'MariaDB (\d+\.\d+\.\d+) \(bundle\)'
+  'MySQL 8.4'   = Get-Shipped 'MySQL (\d+\.\d+\.\d+) \(bundle\)'
   'Adminer'     = Get-Shipped 'Adminer (\d+\.\d+\.\d+) \(bundle\)'
 }
-# Shipped since 2.2.0 (replaced phpMyAdmin): older releases do not list it,
-# which is no failed check
-$sinceLaterRelease = @('Adminer')
+# Shipped since a later release (Adminer 2.2.0 instead of phpMyAdmin, MySQL as
+# second engine 2.4.0): older releases do not list them, which is no failed check
+$sinceLaterRelease = @('Adminer', 'MySQL 8.4')
 
 # --- Upstream versions: same sources as the build scripts ---------------------
 $upstream = [ordered]@{}
@@ -89,6 +90,17 @@ try {
   if (-not $v) { throw "no release listed for series $series" }
   $upstream['MariaDB'] = $v
 } catch { $errors += "MariaDB: $($_.Exception.Message)" }
+
+# MySQL: same source as package-mysql-module.ps1 (newest 8.4.x tag)
+try {
+  # lowSpeed*: give up on a hanging connection like the HTTP calls' -TimeoutSec
+  $tags = & git -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=$TIMEOUT_SEC ls-remote --tags 'https://github.com/mysql/mysql-server' 'refs/tags/mysql-8.4.*'
+  if ($LASTEXITCODE -ne 0) { throw 'git ls-remote failed' }
+  $patch = $tags | ForEach-Object { if ($_ -match 'refs/tags/mysql-8\.4\.(\d+)$') { [int]$Matches[1] } } |
+    Sort-Object -Descending | Select-Object -First 1
+  if ($null -eq $patch) { throw 'no mysql-8.4.x tag found' }
+  $upstream['MySQL 8.4'] = "8.4.$patch"
+} catch { $errors += "MySQL: $($_.Exception.Message)" }
 
 try {
   $tag = (Get-Json 'https://api.github.com/repos/vrana/adminer/releases/latest' $apiHeaders).tag_name

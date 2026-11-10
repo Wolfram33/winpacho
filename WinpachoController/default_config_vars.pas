@@ -32,6 +32,11 @@ const
   GUI_CLASSIC = 'classic'; // normal window with title bar and menu bar (UniServer Zero layout)
   GUI_MODERN  = 'modern';  // round Reload medallion
 
+  //Database engines, core\mysql\us_opt.ini [USER] text. The bundle ships both
+  //(since 2.4.0): the active one in core\mysql, the other in core\db_standby\<engine>
+  DB_ENGINE_MARIADB = 'MariaDB';
+  DB_ENGINE_MYSQL   = 'MySQL';
+
 Var
 
   //==== User Config and Enironment variables
@@ -63,7 +68,7 @@ Var
    US_OPT2_PAGE        :string;   // page to display when button clicked
    US_OPT3_BTN_TXT     :string;   // button text - phpMyBackupPro
    US_OPT3_PAGE        :string;   // page to display when button clicked
-   US_MYMAR_TXT        :string;   // Display string of the engine: MariaDB ('MySQL' = old installation)
+   US_MYMAR_TXT        :string;   // Name of the active engine: DB_ENGINE_MARIADB or DB_ENGINE_MYSQL
   //==== User Config button options
 
 
@@ -362,6 +367,7 @@ Var
  default_browser_ready_flag:boolean; // Default browser ready flag
 
   procedure us_main_init;   // Set initial values for variables and paths.
+  procedure us_load_db_engine_config; // Engine name and start/stop texts from core\mysql\us_opt.ini
 
   implementation
 
@@ -396,7 +402,6 @@ var
  Ini4:TINIFile;                      // Handle for configuration file
  Ini5:TINIFile;                      // Handle for configuration file
  Ini6:TINIFile;                      // Handle for configuration file
- Ini7:TINIFile;                      // Handle for configuration file
  php_valid:   boolean;               // Temp var
 
 begin
@@ -916,26 +921,8 @@ begin
  //=== End Key option 3 user configuration us_opt3.ini
 
 
- //=== MySQL or MariaDB configuration file us_opt.ini
-    //==USF_MYMAR_TXT_INI - User server configuration
-
-   Ini7 := TINIFile.Create(USF_MYMAR_TXT_INI); // create object
-   //*** Start ***
-   //[USER]
-   // MariaDB is the only engine since 2.2.0; 'MySQL' here marks an old
-   // installation that WarnIfMySqlEngine (main_unit) asks to move to MariaDB
-   US_MYMAR_TXT   := Ini7.ReadString('USER','text','MariaDB');
-
-   //*** End ***
-   Ini7.Free;     // Free method of object
-
- //=== End MySQL or MariaDB configuration file us_opt.ini
-
- //Button text
- START_MY            := 'Start '+US_MYMAR_TXT;   // Start MySQL or Start MariaDB
- STOP_MY             := 'Stop  '+US_MYMAR_TXT;   // Start MySQL or Start MariaDB
- START_MY_SVC        := 'Start '+US_MYMAR_TXT+' service'; // Installed as Windows service
- STOP_MY_SVC         := 'Stop '+US_MYMAR_TXT+' service';
+ //=== Database engine: us_opt.ini of the engine in core\mysql
+ us_load_db_engine_config;
 
  //=== SET ENVIRONOMENT VARIABLES =======
 
@@ -981,5 +968,32 @@ begin
 
 end;
 {--- End us_main_init --------------------------------------}
+{===============================================================
+ us_load_db_engine_config:
+ Name of the active database engine (core\mysql\us_opt.ini) and the
+ start/stop texts built from it. Part of us_main_init, and run again
+ after Switch database engine (us_db_engine.pas) has swapped core\mysql.
+ A missing file or an empty name falls back to MariaDB, the default engine.
+================================================================}
+procedure us_load_db_engine_config;
+var
+ Ini7:TINIFile;                      // Handle for us_opt.ini
+begin
+ Ini7 := TINIFile.Create(USF_MYMAR_TXT_INI);
+ try
+   US_MYMAR_TXT := Trim(Ini7.ReadString('USER','text',DB_ENGINE_MARIADB));
+ finally
+   Ini7.Free;
+ end;
+ If US_MYMAR_TXT = '' Then US_MYMAR_TXT := DB_ENGINE_MARIADB;
+
+ //Button text
+ START_MY            := 'Start '+US_MYMAR_TXT;   // Start MySQL or Start MariaDB
+ STOP_MY             := 'Stop  '+US_MYMAR_TXT;   // Stop MySQL or Stop MariaDB
+ START_MY_SVC        := 'Start '+US_MYMAR_TXT+' service'; // Installed as Windows service
+ STOP_MY_SVC         := 'Stop '+US_MYMAR_TXT+' service';
+end;
+{--- End us_load_db_engine_config ------------------------------}
+
 end.
 

@@ -9,7 +9,7 @@
 
 > **Looking for Uniform Server Reload?** You found it: the project was renamed to **winpacho** with version 2.0.0. Everything else stays the same — same code, same releases, same issues; old links to `uniserver-reload` redirect here. Existing installations keep working and update as before.
 
-**No external dependencies, no installation, no configuration:** the complete WAMP stack — Apache, MariaDB, PHP 8.3/8.4/8.5, Adminer and the updated controller — ships as a **single archive** ([`winpacho.zip`](https://github.com/Wolfram33/winpacho/releases/tag/latest)). Unpack it anywhere and everything is immediately ready to run. Nothing needs to be downloaded from SourceForge or windows.php.net, no modules need to be added, no settings need to be changed. Portable as ever: no installer, no registry entries.
+**No external dependencies, no installation, no configuration:** the complete WAMP stack — Apache, MariaDB **and** MySQL (switchable), PHP 8.3/8.4/8.5, Adminer and the updated controller — ships as a **single archive** ([`winpacho.zip`](https://github.com/Wolfram33/winpacho/releases/tag/latest)). Unpack it anywhere and everything is immediately ready to run. Nothing needs to be downloaded from SourceForge or windows.php.net, no modules need to be added, no settings need to be changed. Portable as ever: no installer, no registry entries.
 
 > ### ⚡ Current PHP versions — upstream never made it past 8.3
 > The original server is stuck on PHP 8.3 (no updates since November 2023) — a dealbreaker for modern apps and frameworks. This fork ships **PHP 8.3, 8.4 and 8.5 preinstalled and switchable** in the controller (*PHP > Select PHP version*), repackaged from the official windows.php.net builds. CI packages new PHP releases automatically, so future versions reach the bundle quickly — and every build is smoke-tested with each installed PHP version before it is published.
@@ -29,10 +29,10 @@ This fork continues the source of the two original control programs (UniControll
 
 This repository contains the **source code of the controllers only**, written in Free Pascal and compiled with [Lazarus](https://www.lazarus-ide.org/):
 
-* **[WinpachoController](WinpachoController/)** — the main GUI that starts, stops and configures Apache, MariaDB and PHP (see its [README](WinpachoController/README.md) for build instructions)
+* **[WinpachoController](WinpachoController/)** — the main GUI that starts, stops and configures Apache, MariaDB/MySQL and PHP (see its [README](WinpachoController/README.md) for build instructions)
 * **[WinpachoService](WinpachoService/)** — the service module that runs the servers as Windows services (see its [README](WinpachoService/README.md))
 
-The actual server binaries are not part of this repository. Apache, PHP, MariaDB and Adminer are fetched from their vendors by the packaging scripts in [scripts/](scripts/) on every CI build; the Apache configuration and the remaining pieces come from the Uniform Server ZeroXV 15.0.2 base package.
+The actual server binaries are not part of this repository. Apache, PHP, MariaDB, MySQL and Adminer are fetched from their vendors by the packaging scripts in [scripts/](scripts/) on every CI build; the Apache configuration and the remaining pieces come from the Uniform Server ZeroXV 15.0.2 base package.
 
 ## Downloads
 
@@ -42,12 +42,13 @@ Every push triggers a build that updates the rolling release with fixed download
 
 | File | Description |
 |---|---|
-| **`winpacho.zip`** | **Recommended. All-in-one, zero-setup package: the complete server (Apache, MariaDB, Adminer, PHP 8.3/8.4/8.5 with 8.5 preselected, updated controller) as a plain zip — extract it into an empty folder, start `WinpachoController.exe` and it runs, no further downloads or configuration** |
+| **`winpacho.zip`** | **Recommended. All-in-one, zero-setup package: the complete server (Apache, MariaDB and MySQL with MariaDB preselected, Adminer, PHP 8.3/8.4/8.5 with 8.5 preselected, updated controller) as a plain zip — extract it into an empty folder, start `WinpachoController.exe` and it runs, no further downloads or configuration** |
 | `winpacho.7z` | The same bundle as a `.7z` (LZMA, solid): about half the download size — the footprint the former self-extracting exe had, without the exe stub Defender flagged. Windows 11 23H2+ extracts it with Explorer, older Windows needs [7-Zip](https://www.7-zip.org/) |
 | `winpacho_php83_module.zip` | PHP 8.3 module — for adding to or updating an existing installation |
 | `winpacho_php84_module.zip` | PHP 8.4 module (latest official thread-safe x64 build, winpacho module layout) — for adding to an existing installation |
 | `winpacho_php85_module.zip` | PHP 8.5 module — for adding to an existing installation |
-| `winpacho_mariadb_module.zip` | The bundle's database engine (MariaDB LTS) as a separate module — for installations that still run MySQL (1.3.5 or older, or the MySQL module up to 2.1.x), see [Databases](#databases-mariadb-and-adminer) |
+| `winpacho_mariadb_module.zip` | The bundle's MariaDB (LTS) as a separate module — for installations from before 2.4.0 that still run MySQL, see [Databases](#databases-mariadb-mysql-and-adminer) |
+| `winpacho_mysql_module.zip` | The bundle's MySQL 8.4 LTS as a separate module — the same files as `core\db_standby\mysql` in the bundle, see [Databases](#databases-mariadb-mysql-and-adminer) |
 
 **Archive downloads only.** Until releases are code-signed there are no bare exe downloads: Windows Defender's machine-learning heuristic quarantined the unsigned self-extracting archive right after download as `Trojan:Win32/Wacatac.B!ml` (a known false positive), and SmartScreen warns on downloaded exes in general. A zip needs no extra tool on Windows, and the binaries inside are not flagged. To update only the controller of an existing installation, take `WinpachoController.exe` and `utils\WinpachoService.exe` out of the bundle zip (see [Upgrading](#upgrading)).
 
@@ -62,7 +63,7 @@ winpacho is free and open source. If it saves you time, you can support its deve
 There is no in-place updater — the package is portable by design. Two paths:
 
 * **Controller-only upgrade** (e.g. 1.2.0 → 1.2.1): extract the new `winpacho.zip` somewhere temporary and copy just `WinpachoController.exe` (into the server folder) and `utils\WinpachoService.exe` (into its `utils` subfolder) over the old ones. Your `www` content, databases and configuration stay untouched. (The version shown on the splash and test pages comes from `AppVersion=` in `home\us_config\us_config.ini`; update it by hand if you want the pages to match.)
-* **Full upgrade** (new Apache/PHP/database builds): unpack the new bundle into a fresh folder and move over your `www` content, your databases and any configuration you changed (e.g. `home\us_config\us_user.ini`, `core\msmtp\msmtprc.ini`, certificates in `core\apache2\server_certs`). Databases move as a folder (`core\mysql\data`) only between installations with the **same engine**; from an installation that still runs MySQL into MariaDB they move as dumps, see [Databases](#databases-mariadb-and-adminer).
+* **Full upgrade** (new Apache/PHP/database builds): unpack the new bundle into a fresh folder and move over your `www` content, your databases and any configuration you changed (e.g. `home\us_config\us_user.ini`, `core\msmtp\msmtprc.ini`, certificates in `core\apache2\server_certs`). Databases move as a folder (`core\mysql\data`) only between installations with the **same engine**; between MariaDB and MySQL they move as dumps, see [Databases](#databases-mariadb-mysql-and-adminer).
 * **Server tuning for an existing installation** (log rotation, OPcache, load limits, see [Sized for a small-business server](#sized-for-a-small-business-server)): with Apache stopped, run from a checkout of this repository
 
   ```
@@ -99,37 +100,45 @@ The certificate covers `localhost`, `127.0.0.1` and `::1`, is valid for 10 years
 
 **Note:** In this fork HTTP and HTTPS serve the **same** `www` folder — apps placed in `www` work on both `http://localhost/...` and `https://localhost/...`. (Upstream serves HTTPS from a separate `ssl` folder, which makes apps 404 over HTTPS.) To restore the classic split set `US_ROOTF_SSL=./ssl` in `home\us_config\us_user.ini`. With virtual hosts both ports also behave identically: requests with unknown host names (e.g. access by IP address) fall back to `www` on http **and** https instead of landing in the first vhost.
 
-## Databases: MariaDB and Adminer
+## Databases: MariaDB, MySQL and Adminer
 
-Since 1.3.6 the bundle ships **MariaDB** as its database engine instead of MySQL 8.2, and since 2.2.0 it is the **only** engine. It sits where MySQL sat (`core\mysql`, port 3306, root password `root`), the controller menus and buttons say *MariaDB*, and `mysqli`/`pdo_mysql` and the command line tools (`mysql.exe`, `mysqldump.exe`) work as they did with MySQL. Why MariaDB:
+The bundle ships **two database engines, ready to run** (since 2.4.0): **MariaDB** (active after unpacking) and **MySQL 8.4 LTS** (on standby). Nothing needs to be downloaded or installed to switch. The active engine always sits in `core\mysql` on port 3306 with root password `root`; the controller menus and buttons name it, and `mysqli`/`pdo_mysql` and the command line tools (`mysql.exe`, `mysqldump.exe`) work the same with either.
+
+* **Choosing**: on the first start the controller asks which engine should run by default, in the same window as the window look. Later: last entry of the database menu, *Switch database engine to ...* (database stopped, not installed as a Windows service).
+* **How the switch works**: the waiting engine lives complete - binaries, `my.ini`, its own data folder - in `core\db_standby\mariadb` or `core\db_standby\mysql`. Switching renames the two folders, so the active engine is back in `core\mysql` and the other one waits. Nothing is deleted. Each engine keeps **its own databases, users and root password** (the waiting one keeps it in `standby_root_password.txt`). Do not move files in `core\db_standby` by hand.
+* **Taking databases along**: the two engines cannot read each other's data folder, so data travels as SQL dumps: *Database backup* in one engine, switch, *Database restore* in the other. Restricted users are created again in the new engine.
+
+**When MySQL**: the live server of your app (web hosting) runs MySQL and you want to test against the same engine, or the app relies on what only MySQL has - for example the **binary JSON type** (MySQL stores `JSON` columns in an optimized binary format with fast key access and in-place partial updates; MariaDB's `JSON` is an alias for `LONGTEXT` with a validity check, with the same JSON functions), the X Protocol / Document Store, or MySQL's exact optimizer and error behaviour.
+
+**When MariaDB** (the default):
 
 * **Everything is in the free build**: thread pool, audit plugin (`lib\plugin\server_audit.dll`), encryption at rest, and hot physical backups with `core\mysql\bin\mariadb-backup.exe --backup --target-dir=...`. MySQL keeps these in its paid Enterprise edition.
 * **Lighter on Windows**: about a third of MySQL 8's size, faster start, less memory at rest.
 * **No password-plugin trouble**: MySQL 8.4 switched off `mysql_native_password` by default, which breaks older tools and drivers. MariaDB stays compatible with them.
 * **Owned by a foundation** with an open-source guarantee, no Community/Enterprise split.
 
-**Which MariaDB**: the packaging script picks the stable long-term-support series with the **longest remaining support** (MariaDB's REST API publishes the end-of-life dates), at its newest patch level, and moves to a newer series only once its support outlasts the current one. The exact version is on the splash page (`http://localhost/us_splash/`) and in the release notes. The module is built by CI from MariaDB's download (`scripts\package-mariadb-module.ps1`) and is the same file the bundle uses; its data folder went through one start and a clean shutdown.
+**Which versions**: for MariaDB the packaging script picks the stable long-term-support series with the **longest remaining support** (MariaDB's REST API publishes the end-of-life dates), at its newest patch level, and moves to a newer series only once its support outlasts the current one. For MySQL it takes the newest patch of the **8.4 LTS** series. The exact versions are on the splash page (`http://localhost/us_splash/`) and in the release notes. Both modules are built by CI from the vendor downloads (`scripts\package-mariadb-module.ps1`, `scripts\package-mysql-module.ps1`) and are the same files the bundle uses; their data folders went through one start and a clean shutdown. MySQL's TLS keys and server UUID are not shipped: each installation creates its own on the first MySQL start. MySQL runs without binary log and without the X Protocol port 33060 (both can be switched on in its `my.ini`).
 
 ### Adminer instead of phpMyAdmin (2.2.0)
 
-The controller's database tool button opens **[Adminer](https://www.adminer.org/)** (`home\us_opt1`, `http://localhost/us_opt1/`): a single PHP file instead of phpMyAdmin's 54 MB and 4,100 files, fetched unmodified in its newest release by every CI build. It also opens **SQLite** databases. The button works whenever Apache runs with a PHP version selected; MariaDB is only needed for MariaDB databases.
+The controller's database tool button opens **[Adminer](https://www.adminer.org/)** (`home\us_opt1`, `http://localhost/us_opt1/`): a single PHP file instead of phpMyAdmin's 54 MB and 4,100 files, fetched unmodified in its newest release by every CI build. It also opens **SQLite** databases. The button works whenever Apache runs with a PHP version selected; the database engine is only needed for its own databases.
 
-* **MariaDB**: the button logs in as root by itself (password from `htpasswd\mysql\passwd.txt`, which the controller keeps up to date) and lands on the server overview. After *Logout* the normal login form appears: system *MySQL / MariaDB*, server `127.0.0.1:3306`, user `root`, the root password. If MariaDB is not running, the form says so.
-* **SQLite**: on the login form choose system *SQLite*, enter the full path of the database file (e.g. `C:\winpacho\www\app\data.sqlite`) as *Database*, leave the user empty and enter the **MariaDB root password**. SQLite has no passwords of its own, so Adminer checks this one itself before it opens a file.
+* **MariaDB / MySQL**: the button logs in to the active engine as root by itself (password from `htpasswd\mysql\passwd.txt`, which the controller keeps up to date) and lands on the server overview. After *Logout* the normal login form appears: system *MySQL / MariaDB*, server `127.0.0.1:3306`, user `root`, the root password. If the engine is not running, the form says so.
+* **SQLite**: on the login form choose system *SQLite*, enter the full path of the database file (e.g. `C:\winpacho\www\app\data.sqlite`) as *Database*, leave the user empty and enter the **root password of the active engine**. SQLite has no passwords of its own, so Adminer checks this one itself before it opens a file.
 * **This computer only**: the folder answers with `Require local` - Apache listens on all network interfaces, and the automatic login would open the databases to the whole network. To reach Adminer from another computer, protect it with a password of its own first; do not just open the folder.
 * **No calls home**: Adminer's version check is off and adminer.org is removed from its Content-Security-Policy.
 * The winpacho additions live in `home\us_opt1\index.php` and `winpacho-adminer.php` (source: [`bundle/adminer/`](bundle/adminer/)); `adminer.php` stays the upstream file.
 
 **Updating an existing installation to Adminer:** stop Apache, rename `home\us_opt1` (the old phpMyAdmin) to e.g. `us_opt1-phpmyadmin`, copy `home\us_opt1` from the new bundle, and limit the folder to this computer: run `scripts\tune-server-config.ps1` (see [Upgrading](#upgrading)), or in `core\apache2\conf\httpd.conf` change `Require all granted` to `Require local` inside the `<Directory "${US_ROOTF}/home/us_opt1/">` block. (Adminer itself only logs in automatically for requests from this computer to `localhost`, but the folder should not be open to the network either way.) The phpMyAdmin leftovers in MariaDB (database `phpmyadmin`, user `pma`) do no harm and can be dropped in Adminer.
 
-### Still running MySQL?
+### Installations from before 2.4.0
 
-Bundles up to 1.3.5 ran MySQL 8.2, and up to 2.1.x MySQL 8.4 was available as `winpacho_mysql_module.zip`. Since 2.2.0 MySQL is no longer shipped and the controller has no MySQL-specific code left: a MySQL installation keeps starting, but the root password functions are written for MariaDB, and the controller asks at every start to move. The two engines cannot open each other's data folder, so the data travels as SQL dumps:
-
-1. Export every database you need: *MySQL > Database backup* in the controller, or `core\mysql\bin\mysqldump.exe --user=root --password=root --databases <name> > <name>.sql` per database.
-2. Stop the database. Delete `core\mysql` completely (mixing the two engines' files corrupts the data folder).
-3. Unzip `winpacho_mariadb_module.zip` into the server folder. It brings `core\mysql` with a fresh data folder and root password `root`.
-4. Start MariaDB and import the dumps: *MariaDB > Database restore* in the controller, or `core\mysql\bin\mysql.exe --user=root --password=root < <name>.sql`. Recreate application users (*MariaDB > Create restricted MariaDB user*) - dumps of single databases do not carry them.
+* **Add MySQL to a MariaDB installation (2.2.x/2.3.x)**: close the controller, copy `WinpachoController.exe` and the folder `core\db_standby` from the new bundle into your server folder. The database menu then offers *Switch database engine to MySQL*. (Or unzip `winpacho_mysql_module.zip` into an empty folder and move its `core\mysql` to `core\db_standby\mysql` of your server folder.)
+* **Still running an old MySQL** (bundles up to 1.3.5 ran MySQL 8.2, the MySQL module up to 2.1.x MySQL 8.4): it keeps working with the current controller. For the tuned engines of the current bundle, move the data as dumps:
+  1. Export every database you need: *MySQL > Database backup* in the controller, or `core\mysql\bin\mysqldump.exe --user=root --password=root --databases <name> > <name>.sql` per database.
+  2. Stop the database. Move `core\mysql` out of the server folder (mixing two engines' files corrupts the data folder).
+  3. Copy `core\mysql` and `core\db_standby` from the new bundle into the server folder (MariaDB active, MySQL on standby), switch to the engine you want.
+  4. Start it and import the dumps: *Database restore* in the controller, or `core\mysql\bin\mysql.exe --user=root --password=root < <name>.sql`. Recreate application users (*Create restricted user*) - dumps of single databases do not carry them.
 
 ## E-mail: PHP `mail()` with a real SMTP account
 

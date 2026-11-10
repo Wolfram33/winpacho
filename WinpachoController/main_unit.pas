@@ -16,6 +16,7 @@ uses
   us_buttons,
   us_medallion,
   us_gui_style_dlg,
+  us_db_engine,
   default_config_vars,
   us_common_procedures,
   us_common_functions,
@@ -318,6 +319,8 @@ type
     FTrayMenu      : TPopupMenu;       // right-click menu of the notification area icon
     FClassic       : Boolean;          // True = classic window look, False = medallion
     FModernBounds  : array of TDesignBounds; // medallion places of LayoutControls, taken from the .lfm
+    FShownEngineName : string;         // engine name the captions carry now ('' = design text 'MySQL')
+    FEngineSwitchItem: TMenuItem;      // database menu: Switch database engine
     procedure RenderBackground;
     function LayoutControls: TControlList; // controls whose place depends on the window look
     procedure ApplyGuiStyle;               // switch the form to USC_GuiStyle (classic or medallion)
@@ -326,11 +329,14 @@ type
     function SaveGuiStyle(const AStyle: string): Boolean;
     procedure SwitchGuiStyle(const AStyle: string); // menu General > Window look
     function MenuItemForTab(ATab: TUsButton): TMenuItem;
-    procedure ApplyDatabaseEngineName; // 'MySQL' in the design becomes the installed engine's name (MariaDB)
+    procedure ApplyDatabaseEngineName; // captions name the active engine (MariaDB or MySQL)
     procedure CreateTrayMenu;          // Show / Exit for the notification area icon
     procedure TrayShowClick(Sender: TObject);
     procedure TrayExitClick(Sender: TObject);
-    procedure WarnIfMySqlEngine;       // MariaDB only since 2.2.0: explain the move off an old MySQL
+    procedure CreateEngineSwitchMenuItem; // "Switch database engine to ..." at the end of the database menu
+    procedure UpdateEngineSwitchItem;  // its caption names the engine on standby
+    procedure EngineSwitchClick(Sender: TObject);
+    function SwitchDatabaseEngine: Boolean; // swap the engines, report the outcome
   protected
     procedure CreateWnd; override;     // hooks the title bar minimize button (see TitleBarMinimizeProc)
   public
@@ -534,12 +540,18 @@ end;
 
 procedure TMain.AskGuiStyleOnce;
 var
-  choice: string;
+  choice, engine, standby: string;
 begin
   if USC_GuiStyle <> '' then Exit;          // already chosen
-  choice := us_ask_gui_style;               // coloured choice dialog, us_gui_style_dlg.pas
-  if choice <> '' then SaveGuiStyle(choice);
-  // Closed without a choice: medallion for now, asked again at the next start
+  // Same dialog, first band: the database engine - offered when the other
+  // engine waits in core\db_standby (bundles from 2.4.0 on)
+  standby := '';
+  if us_db_engine_in_standby(us_db_standby_engine) then standby := us_db_standby_engine;
+  choice := us_ask_gui_style(US_MYMAR_TXT, standby, engine); // coloured choice dialog, us_gui_style_dlg.pas
+  if choice = '' then Exit;   // closed without a choice: medallion and engine as shipped, asked again next start
+  SaveGuiStyle(choice);
+  // The captions are renamed after this (ApplyDatabaseEngineName in FormCreate)
+  if engine <> US_MYMAR_TXT then SwitchDatabaseEngine;
 end;
 
 procedure TMain.SwitchGuiStyle(const AStyle: string);
@@ -751,18 +763,19 @@ begin
 end;
 
 {====================================================================
-The form is designed with 'MySQL' in every database caption. Since 1.3.6
-the bundle ships MariaDB (the only engine since 2.2.0), and
-core\mysql\us_opt.ini names the installed engine (US_MYMAR_TXT). Rename
-every caption once at start-up so the user sees the engine they actually
-run: menu tree (the tabs mirror it in SyncMenuTabs), utilities label,
-console button. The start/stop button gets its text from START_MY/STOP_MY.
+The form is designed with 'MySQL' in every database caption. The bundle
+ships MariaDB and MySQL (since 2.4.0), and core\mysql\us_opt.ini names
+the active engine (US_MYMAR_TXT). Rename every caption at start-up and
+after each Switch database engine, so the user sees the engine they
+actually run: menu tree (the tabs mirror it in SyncMenuTabs), utilities
+label, console button. FShownEngineName remembers the name the captions
+carry now. The start/stop button gets its text from START_MY/STOP_MY.
 --------------------------------------------------------------------}
 procedure TMain.ApplyDatabaseEngineName;
 
   function Renamed(const ACaption: string): string;
   begin
-    Result := StringReplace(ACaption, 'MySQL', US_MYMAR_TXT, [rfReplaceAll]);
+    Result := StringReplace(ACaption, FShownEngineName, US_MYMAR_TXT, [rfReplaceAll]);
   end;
 
   procedure RenameMenu(AItem: TMenuItem);
@@ -774,10 +787,13 @@ procedure TMain.ApplyDatabaseEngineName;
   end;
 
 begin
-  if (US_MYMAR_TXT = '') or (US_MYMAR_TXT = 'MySQL') then Exit;
+  if FShownEngineName = '' then FShownEngineName := DB_ENGINE_MYSQL; // the design text
+  if (US_MYMAR_TXT = '') or (US_MYMAR_TXT = FShownEngineName) then Exit;
   RenameMenu(MainMenu1.Items);
   Lbl_mysql_utilities.Caption := Renamed(Lbl_mysql_utilities.Caption);
   Btn_mysql_console.Caption   := Renamed(Btn_mysql_console.Caption);
+  FShownEngineName := US_MYMAR_TXT;
+  UpdateEngineSwitchItem;     // built in code, its caption is its own
 end;
 
 procedure TMain.SyncMenuTabs;
@@ -1749,7 +1765,7 @@ If us_application_is_runable Then   // A draconian check. If a space found in pa
   If (ParamCount = 0) Then AskGuiStyleOnce; // First interactive start: classic window or medallion
   ApplyGuiStyle;                    // Shape the window in the chosen look before it is shown
   ApplyDatabaseEngineName;         // Menus and buttons name the installed engine (us_opt.ini), not 'MySQL'
-  If (ParamCount = 0) Then WarnIfMySqlEngine; // Old installation still on MySQL: how to move to MariaDB
+  CreateEngineSwitchMenuItem;       // Database menu: switch between MariaDB and MySQL
   us_auto_generate_ssl_cert;        // First start: generate localhost certificate and enable SSL
 
   //--- First interactive start: proactively offer to trust the certificate
@@ -2285,39 +2301,88 @@ begin
 end;
 
 {====================================================================
-MariaDB is the only database engine since 2.2.0: the MySQL module and
-the MySQL-specific code paths (password plugin, console window, skip-
-grants start) are gone. An installation that still runs MySQL - a bundle
-up to 1.3.5 or the MySQL module up to 2.1.x - keeps starting, but the
-root password functions are written for MariaDB. Every interactive start
-says so and explains the move until MariaDB is installed.
+Switch database engine. The bundle ships MariaDB and MySQL (since
+2.4.0): the active one in core\mysql, the other in core\db_standby
+(us_db_engine.pas swaps them). Someone who needs the other engine looks
+in the database menu first, so the switch lives there as its last
+entry. Built in code after ApplyDatabaseEngineName; the entry is shown
+even without a standby engine, and then says how to get one.
 --------------------------------------------------------------------}
-procedure TMain.WarnIfMySqlEngine;
-const
-  RELEASES_URL = 'https://github.com/Wolfram33/winpacho/releases/tag/latest';
+procedure TMain.CreateEngineSwitchMenuItem;
 var
-  str: string;
+  item: TMenuItem;
 begin
-  if not (FileExists(USF_MYMAR_TXT_INI) and (US_MYMAR_TXT = 'MySQL')) then Exit;
+  if FEngineSwitchItem <> nil then Exit;
+  item := TMenuItem.Create(MM_mysql);
+  item.Caption := '-';
+  MM_mysql.Add(item);
 
-  str := 'This installation still runs MySQL (folder core\mysql).'                          + sLineBreak +
-         'Since 2.2.0 winpacho supports MariaDB only. Your apps keep working, but'         + sLineBreak +
-         'MySQL > Change MySQL password and Restore default password (root) are'           + sLineBreak +
-         'made for MariaDB and may fail on MySQL.'                                          + sLineBreak + sLineBreak +
-         'Move to MariaDB - the data folders of the two are not compatible,'               + sLineBreak +
-         'so the databases travel as dumps:'                                                + sLineBreak + sLineBreak +
-         '1. MySQL > Database backup for every database you need.'                          + sLineBreak +
-         '2. Stop MySQL and delete the folder core\mysql completely.'                       + sLineBreak +
-         '3. Unzip winpacho_mariadb_module.zip into the server folder'                      + sLineBreak +
-         '   (' + UniConPath + ').'                                                          + sLineBreak +
-         '4. Restart WinpachoController - the menus then say MariaDB - and import'          + sLineBreak +
-         '   the dumps with MariaDB > Database restore. Recreate restricted users.'         + sLineBreak + sLineBreak +
-         'This notice appears at every start until MariaDB is installed.'                   + sLineBreak +
-         'The module is on the releases page, next to the bundle.'                          + sLineBreak + sLineBreak +
-         'Open the releases page in the browser now?';
+  FEngineSwitchItem := TMenuItem.Create(MM_mysql);
+  FEngineSwitchItem.OnClick := @EngineSwitchClick;
+  MM_mysql.Add(FEngineSwitchItem);
+  UpdateEngineSwitchItem;
+end;
 
-  if us_MessageDlg('MySQL is no longer supported', str, mtWarning, [mbYes, mbNo], 0) = mrYes then
-    browser_display_url(RELEASES_URL);
+procedure TMain.UpdateEngineSwitchItem;
+begin
+  if FEngineSwitchItem = nil then Exit;
+  FEngineSwitchItem.Caption := 'Switch database engine to ' + us_db_standby_engine + '...';
+end;
+
+procedure TMain.EngineSwitchClick(Sender: TObject);
+var
+  blocker, str, other: string;
+begin
+  other   := us_db_standby_engine;
+  blocker := us_db_switch_blocker;
+  if blocker <> '' then
+  begin
+    us_MessageDlg('Switch database engine', blocker, mtInformation, [mbOk], 0);
+    Exit;
+  end;
+
+  str := 'Active now: ' + US_MYMAR_TXT + '. Make ' + other + ' the active database engine?' + sLineBreak + sLineBreak +
+         'What happens:' + sLineBreak +
+         '- ' + US_MYMAR_TXT + ' moves complete, with all its databases and users, to' + sLineBreak +
+         '  ' + us_db_standby_folder(US_MYMAR_TXT) + sLineBreak +
+         '  and waits there. Nothing is deleted; switching back brings it back.' + sLineBreak +
+         '- ' + other + ' takes its place in core\mysql, on the same port ' + UENV_MYSQL_TCP_PORT + '.' + sLineBreak +
+         '  Apps, Adminer and PHP (mysqli, PDO) connect to it as before.' + sLineBreak + sLineBreak +
+         'The two engines cannot read each other''s data folder, so each one has' + sLineBreak +
+         'its own databases, users and root password. To take databases along:' + sLineBreak +
+         US_MYMAR_TXT + ' > Database backup now, then after the switch ' + other + ' > Database' + sLineBreak +
+         'restore. Restricted users need to be created again in ' + other + '.' + sLineBreak + sLineBreak +
+         'When to choose MySQL: the live server of your app (web hosting) runs MySQL,' + sLineBreak +
+         'or the app relies on MySQL features such as the binary JSON type.' + sLineBreak +
+         'MariaDB stores JSON as text with the same functions.';
+  if us_MessageDlg('Switch database engine to ' + other, str, mtConfirmation, [mbYes, mbNo], 0) <> mrYes then Exit;
+
+  if SwitchDatabaseEngine then
+  begin
+    ApplyDatabaseEngineName;  // captions: old engine name -> new one
+    us_update_server_state;   // start button text, database menu caption
+    SyncMenuTabs;
+  end;
+end;
+
+{ Swaps the engines (us_db_engine.pas) and tells the user the outcome:
+  the next step on success, the cause and the way out on failure. }
+function TMain.SwitchDatabaseEngine: Boolean;
+var
+  msg, str: string;
+begin
+  Result := us_db_switch_engine(msg);
+  if not Result then
+  begin
+    us_MessageDlg('Database engine not switched', msg, mtWarning, [mbOk], 0);
+    Exit;
+  end;
+  str := US_MYMAR_TXT + ' is the active database engine now (folder core\mysql).' + sLineBreak +
+         'Start it with the button Start ' + US_MYMAR_TXT + '. Its root password is the one it' + sLineBreak +
+         'had when it was last active (as shipped: root).' + sLineBreak +
+         'Switch back at any time: ' + US_MYMAR_TXT + ' > Switch database engine to ' + us_db_standby_engine + '.';
+  if msg <> '' then str := str + sLineBreak + sLineBreak + msg;   // warning about the password file
+  us_MessageDlg('Database engine switched', str, mtInformation, [mbOk], 0);
 end;
 
 

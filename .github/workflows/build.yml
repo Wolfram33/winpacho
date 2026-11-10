@@ -126,9 +126,9 @@ jobs:
 
   bundle:
     name: Build all-in-one bundle
-    # The MariaDB module is the bundle's database engine, so it is built
-    # first and merged like the PHP modules
-    needs: [build, package-php-modules, package-mariadb-module]
+    # The database modules are the bundle's engines (MariaDB active, MySQL
+    # on standby), so they are built first and merged like the PHP modules
+    needs: [build, package-php-modules, package-mariadb-module, package-mysql-module]
     runs-on: windows-latest
     steps:
       - name: Checkout
@@ -192,10 +192,28 @@ jobs:
           path: dist/
           if-no-files-found: error
 
+  package-mysql-module:
+    name: Package MySQL module
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build module
+        shell: pwsh
+        run: ./scripts/package-mysql-module.ps1 -OutDir dist
+
+      - name: Upload module
+        uses: actions/upload-artifact@v4
+        with:
+          name: mysql-module
+          path: dist/
+          if-no-files-found: error
+
   release:
     name: Publish release
     if: github.event_name == 'push'
-    needs: [build, package-php-modules, bundle, package-mariadb-module]
+    needs: [build, package-php-modules, bundle, package-mariadb-module, package-mysql-module]
     runs-on: ubuntu-latest
     env:
       VERSION: ${{ needs.build.outputs.version }}
@@ -259,23 +277,47 @@ jobs:
             echo
             echo "| File | Description |"
             echo "|---|---|"
-            echo "| **${BUNDLE_ZIP_NAME}** | **All-in-one package: complete server with current Apache, MariaDB, Adminer and PHP 8.3/8.4/8.5 (8.5 preselected) - extract into an empty folder, start \`WinpachoController.exe\`, no further setup.** To update only the controller of an existing installation, take \`WinpachoController.exe\` and \`utils\\WinpachoService.exe\` out of this zip (see *New program names* below) |"
+            echo "| **${BUNDLE_ZIP_NAME}** | **All-in-one package: complete server with current Apache, MariaDB and MySQL (switchable, MariaDB preselected), Adminer and PHP 8.3/8.4/8.5 (8.5 preselected) - extract into an empty folder, start \`WinpachoController.exe\`, no further setup.** To update only the controller of an existing installation, take \`WinpachoController.exe\` and \`utils\\WinpachoService.exe\` out of this zip (see *New program names* below) |"
             echo "| ${BUNDLE_7Z_NAME} | The same bundle as a .7z: about half the download size (this is why the old self-extracting exe was smaller). Windows 11 23H2+ extracts it with Explorer, older Windows needs [7-Zip](https://www.7-zip.org/) |"
             echo "| winpacho_php83_module.zip | PHP 8.3 module - unzip into your server folder (the folder with WinpachoController.exe) |"
             echo "| winpacho_php84_module.zip | PHP 8.4 module - unzip into your server folder (the folder with WinpachoController.exe) |"
             echo "| winpacho_php85_module.zip | PHP 8.5 module - unzip into your server folder (the folder with WinpachoController.exe) |"
-            echo "| winpacho_mariadb_module.zip | The bundle's database engine (MariaDB LTS) as a separate module - for installations that still run MySQL (1.3.5 or older, or the MySQL module up to 2.1.x): export your databases, delete \`core\\mysql\`, unzip into your server folder, import again |"
+            echo "| winpacho_mariadb_module.zip | The bundle's MariaDB (LTS) as a separate module - for installations from before 2.4.0 that still run MySQL: export your databases, delete \`core\\mysql\`, unzip into your server folder, import again |"
+            echo "| winpacho_mysql_module.zip | The bundle's MySQL 8.4 LTS as a separate module - to add the second engine to an installation from before 2.4.0, see *MariaDB and MySQL side by side* below |"
             echo
             echo "## Packaged component versions"
             echo
             sed 's/^/- /' release-versions.txt
             echo
             echo "The bundle is smoke-tested on every build: Apache is started on the CI"
-            echo "runner and must serve a PHP-rendered page, MariaDB is started, PHP must"
-            echo "connect to it and Adminer must log in to MariaDB and to an SQLite file,"
-            echo "before the release is updated."
+            echo "runner and must serve a PHP-rendered page; MariaDB and then MySQL (swapped in"
+            echo "the way the controller switches engines) are started, PHP must connect to"
+            echo "each and Adminer must log in to each and to an SQLite file, before the"
+            echo "release is updated."
             echo
-            echo "## Adminer replaces phpMyAdmin, MariaDB is the only engine (2.2.0)"
+            echo "## MariaDB and MySQL side by side (2.4.0)"
+            echo
+            echo "The bundle ships **both** database engines, nothing to install: MariaDB"
+            echo "(active after unpacking) and MySQL 8.4 LTS (on standby in"
+            echo "\`core\\db_standby\\mysql\`). On the first start the controller asks which"
+            echo "one should run by default, in the same window as the window look. Later:"
+            echo "last entry of the database menu, *Switch database engine to ...*. Both run"
+            echo "on port 3306 from \`core\\mysql\`, so apps, Adminer and PHP connect as before."
+            echo "Pick MySQL when the live server of your app runs MySQL, or when the app"
+            echo "relies on MySQL-only features such as the binary JSON type (MariaDB stores"
+            echo "JSON as text)."
+            echo
+            echo "Each engine keeps its own databases, users and root password: switching"
+            echo "moves the whole engine folder aside, nothing is deleted. Data travels"
+            echo "between them as dumps (*Database backup* in one, *Database restore* in the"
+            echo "other)."
+            echo
+            echo "**Adding MySQL to an existing installation** (2.3.x or older, MariaDB in"
+            echo "\`core\\mysql\`): copy the new \`WinpachoController.exe\` from this bundle, and"
+            echo "copy the folder \`core\\db_standby\` from this bundle into your server folder."
+            echo "The database menu then offers the switch."
+            echo
+            echo "## Adminer replaces phpMyAdmin (2.2.0)"
             echo
             echo "The database tool behind the controller's button is now **Adminer**: one"
             echo "PHP file instead of phpMyAdmin's 54 MB and 4,100 files, and it opens"
@@ -284,11 +326,6 @@ jobs:
             echo "full path of the database file and the MariaDB root password (default"
             echo "\`root\`). Adminer answers on this computer only (\`Require local\`) and"
             echo "makes no calls to adminer.org (version check off)."
-            echo
-            echo "**MySQL is no longer shipped**: no \`winpacho_mysql_module.zip\` any more, and the"
-            echo "controller has no MySQL-specific code left. An installation that still runs"
-            echo "MySQL keeps starting, but the controller asks at every start to move to"
-            echo "MariaDB (back up, replace \`core\\mysql\` with the MariaDB module, restore)."
             echo
             echo "**Updating an existing installation:** stop Apache, rename \`home\\us_opt1\`"
             echo "(the old phpMyAdmin) to e.g. \`us_opt1-phpmyadmin\`, copy \`home\\us_opt1\` from"
@@ -390,7 +427,7 @@ jobs:
             echo "   (e.g. \`C:\\winpacho\`) - the server files land directly in it, without the old"
             echo "   \`UniServerZ\` subfolder (Uniform Server ZeroXV 15.0.2 base with the fork controller"
             echo "   and the PHP 8.3/8.4/8.5 modules already integrated)."
-            echo "2. Start \`WinpachoController.exe\` and start Apache and MariaDB."
+            echo "2. Start \`WinpachoController.exe\`, choose the database engine (MariaDB or MySQL) and the window look, then start Apache and the database."
             echo "3. PHP 8.5 is preselected (since 1.3.10; earlier bundles started on 8.3). To switch the PHP version: stop Apache first, then *PHP > Select PHP version*, then start Apache again."
             echo
             echo "Upgrading from an install with the old \`UniServerZ\` layout? Everything is fully"

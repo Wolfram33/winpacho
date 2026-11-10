@@ -1,6 +1,7 @@
 # Build the all-in-one bundle (plain zip): Uniform Server ZeroXV base
 # package + freshly built WinpachoController/WinpachoService + PHP 8.4/8.5 modules +
-# the MariaDB module as the database engine (replaces the base's MySQL) +
+# the MariaDB module as the active database engine (replaces the base's MySQL) +
+# the MySQL module as the second engine on standby (core\db_standby\mysql) +
 # the newest Adminer as the database tool (replaces the base's phpMyAdmin).
 #
 # Expects (as laid out by actions/download-artifact):
@@ -8,6 +9,7 @@
 #   artifacts/uniserver-binaries/WinpachoService/WinpachoService.exe
 #   artifacts/php-module-*/winpacho_php8*_module.zip
 #   artifacts/mariadb-module/winpacho_mariadb_module.zip
+#   artifacts/mysql-module/winpacho_mysql_module.zip
 #
 # Produces: dist/winpacho.zip (plus a .7z twin). Unlike the upstream 15_0_2_ZeroXV.exe it
 # is FLAT: the server files land directly in the folder the user extracts to,
@@ -23,6 +25,13 @@ $reloadVersion = $Matches[1]
 $baseVersion = '15.0.2'   # Uniform Server ZeroXV base package the bundle builds on
 Write-Host "==> Building winpacho $reloadVersion (base package $baseVersion)"
 
+# Time limits for every download: a hanging server must not block the CI job
+# until GitHub kills it. Pages and API answers are small, archives are not.
+$CURL_PAGE     = @('--connect-timeout', '30', '--max-time', '120', '--retry', '3')
+$CURL_DOWNLOAD = @('--connect-timeout', '30', '--max-time', '900', '--retry', '3')
+# Requests to the smoke test's own Apache on localhost: answers at once or hangs
+$CURL_LOCAL    = @('--max-time', '30')
+
 $sevenZip = Join-Path $env:ProgramFiles '7-Zip\7z.exe'
 if (-not (Test-Path $sevenZip))  { throw "7z.exe not found at $sevenZip" }
 
@@ -32,12 +41,12 @@ if (-not (Test-Path $sevenZip))  { throw "7z.exe not found at $sevenZip" }
 $mirrorUrl = 'https://github.com/Wolfram33/winpacho/releases/download/base-package/15_0_2_ZeroXV.exe'
 $baseUrl = 'https://downloads.sourceforge.net/project/miniserver/Uniform%20Server%20ZeroXV/15_0_2_ZeroXV/15_0_2_ZeroXV.exe'
 Write-Host '==> Downloading Uniform Server ZeroXV 15.0.2 base package (mirror)'
-& curl.exe -fsSL -o base.exe $mirrorUrl
+& curl.exe -fsSL @CURL_DOWNLOAD -o base.exe $mirrorUrl
 if ($LASTEXITCODE -ne 0) {
   Write-Host '==> Mirror not available, falling back to SourceForge'
   # curl.exe instead of Invoke-WebRequest: SourceForge serves browser-like
   # clients an HTML mirror-selection page instead of the file.
-  & curl.exe -fsSL -o base.exe $baseUrl
+  & curl.exe -fsSL @CURL_DOWNLOAD -o base.exe $baseUrl
   if ($LASTEXITCODE -ne 0) { throw "Base package download failed ($LASTEXITCODE)" }
 }
 $size = (Get-Item base.exe).Length
@@ -69,7 +78,7 @@ function Find-HttpdZip([string]$html) {
     ForEach-Object { [pscustomobject]@{ Patch = [int]$_.Groups[1].Value; VS = [int]$_.Groups[2].Value; Name = $_.Value } } |
     Sort-Object Patch, VS -Descending | Select-Object -First 1
 }
-$dlHtml = (& curl.exe -fsSL -A $UA 'https://www.apachelounge.com/download/') -join "`n"
+$dlHtml = (& curl.exe -fsSL @CURL_PAGE -A $UA 'https://www.apachelounge.com/download/') -join "`n"
 if ($LASTEXITCODE -ne 0) { throw 'Could not fetch Apache Lounge download page' }
 $found = Find-HttpdZip $dlHtml
 if (-not $found) {
@@ -78,7 +87,7 @@ if (-not $found) {
   $vsPages = [regex]::Matches($dlHtml, 'download/VS(\d+)') | ForEach-Object { [int]$_.Groups[1].Value } | Sort-Object -Unique -Descending
   foreach ($vs in $vsPages) {
     Write-Host "==> Scanning subpage /download/VS$vs/"
-    $subHtml = (& curl.exe -fsSL -A $UA "https://www.apachelounge.com/download/VS$vs/") -join "`n"
+    $subHtml = (& curl.exe -fsSL @CURL_PAGE -A $UA "https://www.apachelounge.com/download/VS$vs/") -join "`n"
     if ($LASTEXITCODE -eq 0) { $found = Find-HttpdZip $subHtml }
     if ($found) { break }
   }
@@ -93,7 +102,7 @@ if (-not $found) {
 if ($found.Patch -lt $MinApachePatch) { throw "Newest Apache found is 2.4.$($found.Patch) ($($found.Name)), below the floor 2.4.$MinApachePatch - Lounge page layout changed?" }
 $apVer = "2.4.$($found.Patch)"
 Write-Host "==> Downloading Apache $apVer ($($found.Name))"
-& curl.exe -fsSL -A $UA -e 'https://www.apachelounge.com/download/' -o apache.zip "https://www.apachelounge.com/download/VS$($found.VS)/binaries/$($found.Name)"
+& curl.exe -fsSL @CURL_DOWNLOAD -A $UA -e 'https://www.apachelounge.com/download/' -o apache.zip "https://www.apachelounge.com/download/VS$($found.VS)/binaries/$($found.Name)"
 if ($LASTEXITCODE -ne 0) { throw 'Apache download failed' }
 if ((Get-Item apache.zip).Length -lt 8MB) { throw 'Apache download suspiciously small - HTML page instead of ZIP?' }
 Expand-Archive apache.zip -DestinationPath apachedist
@@ -146,6 +155,47 @@ $dbVersion = $Matches[1]
 if ((Get-Content "$root\core\mysql\us_opt.ini" -Raw) -notmatch '(?m)^text = MariaDB') { throw 'core\mysql\us_opt.ini does not name MariaDB' }
 Write-Host "==> Database engine: MariaDB $dbVersion"
 
+# --- Second database engine: MySQL on standby (2.4.0) -------------------------
+# Apps and hosting that need MySQL itself get it without installing anything:
+# the controller's "Switch database engine" swaps core\mysql with the waiting
+# engine by renaming the two folders (us_db_engine.pas). The standby folder
+# holds the complete module core\mysql - binaries, my.ini, its own data
+# folder - plus its root password in standby_root_password.txt.
+$standbyRoot = "$root\core\db_standby"
+$mysqlStandby = "$standbyRoot\mysql"
+$STANDBY_PWD_FILE = 'standby_root_password.txt'   # codeguard-ignore: a file NAME (as in us_db_engine.pas), no secret - the password inside is the shipped default 'root'
+$mysqlModule = Get-ChildItem -Path 'artifacts' -Recurse -Filter 'winpacho_mysql_module.zip' | Select-Object -First 1
+if (-not $mysqlModule) { throw 'MySQL module ZIP not found in artifacts (package-mysql-module job)' }
+Write-Host "==> Adding MySQL on standby ($($mysqlModule.Name))"
+if (Test-Path 'mysqlmodule') { Remove-Item 'mysqlmodule' -Recurse -Force }
+Expand-Archive -Path $mysqlModule.FullName -DestinationPath 'mysqlmodule' -Force
+if (-not (Test-Path 'mysqlmodule\core\mysql\bin\mysqld_z.exe')) { throw 'MySQL module incomplete: core\mysql\bin\mysqld_z.exe missing' }
+New-Item -ItemType Directory -Force $standbyRoot | Out-Null
+Move-Item 'mysqlmodule\core\mysql' $mysqlStandby
+Copy-Item 'mysqlmodule\htpasswd\mysql\passwd.txt' "$mysqlStandby\$STANDBY_PWD_FILE"
+if (Test-Path 'mysqlmodule\docs\licenses\mysql') {
+  New-Item -ItemType Directory -Force "$root\docs\licenses" | Out-Null
+  Copy-Item 'mysqlmodule\docs\licenses\mysql' "$root\docs\licenses\mysql" -Recurse -Force
+}
+foreach ($f in 'bin\mysqld_z.exe', 'bin\mysql.exe', 'bin\mysqladmin.exe', 'bin\mysqldump.exe', 'my.ini', 'us_opt.ini', 'data\mysql', $STANDBY_PWD_FILE) {
+  if (-not (Test-Path "$mysqlStandby\$f")) { throw "MySQL standby incomplete: core\db_standby\mysql\$f missing" }
+}
+$mysqlVersionLine = ((& "$mysqlStandby\bin\mysqld_z.exe" --no-defaults --version 2>&1) | ForEach-Object { "$_" }) -join ' '
+if ($mysqlVersionLine -notmatch 'Ver (\d+\.\d+\.\d+).*MySQL Community Server') { throw "core\db_standby\mysql\bin\mysqld_z.exe is not a MySQL server: $mysqlVersionLine" }
+$mysqlVersion = $Matches[1]
+if ((Get-Content "$mysqlStandby\us_opt.ini" -Raw) -notmatch '(?m)^text = MySQL') { throw 'core\db_standby\mysql\us_opt.ini does not name MySQL' }
+# Users find the folder in Explorer: it must not look like leftovers
+@'
+This folder holds the database engine that is NOT active right now
+(MariaDB or MySQL - the other one runs from core\mysql).
+
+Do not delete, move or rename anything here by hand: it holds that
+engine's own databases. Switch engines in WinpachoController, last entry
+of the database menu: "Switch database engine to ...". The controller
+then swaps this engine with the one in core\mysql.
+'@ -replace "`r?`n", "`r`n" | Set-Content "$standbyRoot\README.txt" -NoNewline
+Write-Host "==> Second engine: MySQL $mysqlVersion on standby in core\db_standby\mysql"
+
 # --- Database tool: Adminer replaces phpMyAdmin (2.2.0) ----------------------
 # phpMyAdmin 5.2.1 from the base package (54 MB, 4,100 files, plus the 'pma'
 # control user and its storage database) gives way to Adminer: one PHP file
@@ -154,14 +204,13 @@ Write-Host "==> Database engine: MariaDB $dbVersion"
 # login, SQLite login, no version check) and the controller's button text.
 # The tag comes from the redirect of /releases/latest - no API call, so no
 # rate limit on shared CI runners.
-$ADMINER_CURL = @('--max-time', '120', '--retry', '3')   # a hanging GitHub request must not block the job
 Write-Host '==> Looking up the latest Adminer release'
-$adminerTagUrl = & curl.exe -fsSLI @ADMINER_CURL -o NUL -w '%{url_effective}' 'https://github.com/vrana/adminer/releases/latest'
+$adminerTagUrl = & curl.exe -fsSLI @CURL_PAGE -o NUL -w '%{url_effective}' 'https://github.com/vrana/adminer/releases/latest'
 if ($LASTEXITCODE -ne 0) { throw 'Could not resolve the latest Adminer release on GitHub' }
 if ($adminerTagUrl -notmatch '/releases/tag/v(\d+\.\d+\.\d+)$') { throw "Unexpected Adminer release URL: $adminerTagUrl" }
 $adminerVer = $Matches[1]
 Write-Host "==> Downloading Adminer $adminerVer"
-& curl.exe -fsSL @ADMINER_CURL -o adminer.php "https://github.com/vrana/adminer/releases/download/v$adminerVer/adminer-$adminerVer.php"
+& curl.exe -fsSL @CURL_PAGE -o adminer.php "https://github.com/vrana/adminer/releases/download/v$adminerVer/adminer-$adminerVer.php"
 if ($LASTEXITCODE -ne 0) { throw 'Adminer download failed' }
 # All drivers and languages: about 580 KB; the MySQL-only build is a third of that
 if ((Get-Item adminer.php).Length -lt 300KB) { throw 'Adminer download suspiciously small - not the full build?' }
@@ -193,13 +242,8 @@ $c = $c -replace '(?m)^AppVersion=.*?(\r?)$', "AppVersion=$reloadVersion`$1"
 if ($c -notmatch '(?m)^BaseVersion=') {
   $c = $c -replace '(?m)^(AppVersion=.*?\r?)$', "`$1`nBaseVersion=$baseVersion"
 }
-# DatabaseVersion: engine and version for the splash page ("MariaDB 11.8.9");
-# without it the page falls back to the flavour file core\mysql\us_opt.ini
-if ($c -match '(?m)^DatabaseVersion=') {
-  $c = $c -replace '(?m)^DatabaseVersion=.*?(\r?)$', "DatabaseVersion=MariaDB $dbVersion`$1"
-} else {
-  $c = $c -replace '(?m)^(BaseVersion=.*?\r?)$', "`$1`nDatabaseVersion=MariaDB $dbVersion"
-}
+# (No DatabaseVersion stamp since 2.4.0: the splash page reads name and version
+# from core\mysql\us_opt.ini, which moves with the engine when it is switched.)
 # Window title / tray hover text still carries the upstream name in the stock ini
 $c = $c -replace '(?m)^ServerTypeText1=Uniform Server Zero(\r?)$', 'ServerTypeText1=winpacho$1'
 # Minimize stays on the taskbar like any other program; the tray is opt-in
@@ -217,7 +261,6 @@ Set-Content $cfg -Value $c -NoNewline
 if ((Get-Content $cfg -Raw) -notmatch "(?m)^AppVersion=$([regex]::Escape($reloadVersion))") { throw 'us_config.ini version stamp failed' }
 if ((Get-Content $cfg -Raw) -notmatch '(?m)^ServerTypeText1=winpacho') { throw 'us_config.ini ServerTypeText1 stamp failed' }
 if ((Get-Content $cfg -Raw) -notmatch '(?m)^TrayIconEnabled=False') { throw 'us_config.ini TrayIconEnabled stamp failed' }
-if ((Get-Content $cfg -Raw) -notmatch "(?m)^DatabaseVersion=MariaDB $([regex]::Escape($dbVersion))") { throw 'us_config.ini DatabaseVersion stamp failed' }
 if ((Get-Content $cfg -Raw) -notmatch '(?m)^php85=14\.44') { throw 'us_config.ini VCRUNTIME stamp failed' }
 if ($apRuntime -and (Get-Content $cfg -Raw) -notmatch '(?m)^apache=14\.51') { throw 'us_config.ini VCRUNTIME apache stamp failed' }
 Set-Content "$root\home\version.txt" -Value "winpacho $reloadVersion (base package Uniform Server ZeroXV $baseVersion)"
@@ -315,7 +358,7 @@ Write-Host '==> Database tool folders limited to this computer (Require local)'
 # lacks Date/Message-ID headers (spam-filter penalties). Ship the Mozilla
 # CA bundle, a certcheck-on template and the header-adding sendmail shim.
 Write-Host '==> Installing mail setup (CA bundle, msmtp template, header wrapper)'
-& curl.exe -fsSL -o "$root\core\msmtp\cacert.pem" 'https://curl.se/ca/cacert.pem'
+& curl.exe -fsSL @CURL_PAGE -o "$root\core\msmtp\cacert.pem" 'https://curl.se/ca/cacert.pem'
 if ($LASTEXITCODE -ne 0) { throw 'cacert.pem download failed' }
 if ((Get-Item "$root\core\msmtp\cacert.pem").Length -lt 100KB) { throw 'cacert.pem suspiciously small' }
 Copy-Item 'bundle\msmtp\msmtprc.ini' "$root\core\msmtp\msmtprc.ini" -Force
@@ -474,7 +517,7 @@ foreach ($ver in $versions) {
   $resp = $null
   foreach ($i in 1..30) {
     Start-Sleep -Seconds 1
-    $resp = & curl.exe -fsS 'http://localhost:8088/_ci_probe.php' 2>$null
+    $resp = & curl.exe -fsS @CURL_LOCAL 'http://localhost:8088/_ci_probe.php' 2>$null
     if ($LASTEXITCODE -eq 0 -and $resp) { break }
   }
   Stop-SmokeApache
@@ -507,37 +550,40 @@ $peOff = [BitConverter]::ToInt32($rz, 0x3C)
 if ([BitConverter]::ToUInt16($rz, $peOff + 4 + 20 + 68) -ne 2) { throw 'Smoke test: bin\rotatelogs_z.exe is not a GUI-subsystem executable' }
 Write-Host '   log rotation OK - access log written through the windowless rotatelogs_z.exe'
 
-# --- Smoke test: MariaDB starts, PHP reaches it, Adminer logs in ------------
+# --- Smoke test: each database engine starts, PHP reaches it, Adminer logs in -
 # Started the way the controller starts it: --defaults-file only, the port
 # in MYSQL_TCP_PORT (server, client tools and Adminer's winpacho-adminer.php
 # all read that variable), data directory implied by the exe location.
-Write-Host '==> Smoke test: database engine'
-$env:MYSQL_TCP_PORT = '33306'
-$mysqld   = "$rootAbs\core\mysql\bin\mysqld_z.exe"
-$mysqladm = "$rootAbs\core\mysql\bin\mysqladmin.exe"
-$dbErrLog = "$rootAbs\core\mysql\data\mysql.err"
-$dbProc = Start-Process -FilePath $mysqld -ArgumentList "--defaults-file=`"$rootAbs\core\mysql\my.ini`"" -PassThru -NoNewWindow
-$dbReady = $false
-foreach ($i in 1..120) {
-  Start-Sleep -Milliseconds 500
-  if ($dbProc.HasExited) { break }
-  $ping = & $mysqladm --host=127.0.0.1 --port=$env:MYSQL_TCP_PORT --user=root --password=root ping 2>&1
-  if ($LASTEXITCODE -eq 0 -and (($ping | ForEach-Object { "$_" }) -join ' ') -match 'alive') { $dbReady = $true; break }
-}
-if (-not $dbReady) {
-  if (-not $dbProc.HasExited) { $dbProc.Kill() }
-  if (Test-Path $dbErrLog) { Get-Content $dbErrLog | Select-Object -Last 40 | ForEach-Object { Write-Host "   mysql.err: $_" } }
-  throw 'Smoke test: MariaDB did not become ready'
-}
-# The error log must be where the controller's "error log" menu looks
-if (-not (Test-Path $dbErrLog)) { throw 'Smoke test: core\mysql\data\mysql.err was not written (log_error in my.ini)' }
+# $VersionSuffix: what follows the version in SELECT VERSION() ('-MariaDB';
+# MySQL reports the bare number).
+function Test-DbEngine([string]$Engine, [string]$Version, [string]$VersionSuffix) {
+  Write-Host "==> Smoke test: database engine $Engine $Version"
+  $env:MYSQL_TCP_PORT = '33306'
+  $mysqld   = "$rootAbs\core\mysql\bin\mysqld_z.exe"
+  $mysqladm = "$rootAbs\core\mysql\bin\mysqladmin.exe"
+  $dbErrLog = "$rootAbs\core\mysql\data\mysql.err"
+  $dbProc = Start-Process -FilePath $mysqld -ArgumentList "--defaults-file=`"$rootAbs\core\mysql\my.ini`"" -PassThru -NoNewWindow
+  $dbReady = $false
+  foreach ($i in 1..120) {
+    Start-Sleep -Milliseconds 500
+    if ($dbProc.HasExited) { break }
+    $ping = & $mysqladm --host=127.0.0.1 --port=$env:MYSQL_TCP_PORT --user=root --password=root ping 2>&1
+    if ($LASTEXITCODE -eq 0 -and (($ping | ForEach-Object { "$_" }) -join ' ') -match 'alive') { $dbReady = $true; break }
+  }
+  if (-not $dbReady) {
+    if (-not $dbProc.HasExited) { $dbProc.Kill() }
+    if (Test-Path $dbErrLog) { Get-Content $dbErrLog | Select-Object -Last 40 | ForEach-Object { Write-Host "   mysql.err: $_" } }
+    throw "Smoke test: $Engine did not become ready"
+  }
+  # The error log must be where the controller's "error log" menu looks
+  if (-not (Test-Path $dbErrLog)) { throw "Smoke test ($Engine): core\mysql\data\mysql.err was not written (log_error in my.ini)" }
 
-# Probe page: connects as root the way apps and Adminer do (TCP to
-# 127.0.0.1, port from MYSQL_TCP_PORT) and writes a small SQLite database
-# for the Adminer SQLite login below
-$sqliteProbe = Join-Path ([IO.Path]::GetTempPath()) 'winpacho_ci_probe.sqlite'
-if (Test-Path $sqliteProbe) { Remove-Item $sqliteProbe -Force }
-@'
+  # Probe page: connects as root the way apps and Adminer do (TCP to
+  # 127.0.0.1, port from MYSQL_TCP_PORT) and writes a small SQLite database
+  # for the Adminer SQLite login below
+  $sqliteProbe = Join-Path ([IO.Path]::GetTempPath()) 'winpacho_ci_probe.sqlite'
+  if (Test-Path $sqliteProbe) { Remove-Item $sqliteProbe -Force }
+  @'
 <?php
 mysqli_report(MYSQLI_REPORT_OFF);
 $db = new mysqli('127.0.0.1', 'root', 'root', 'mysql', (int) getenv('MYSQL_TCP_PORT'));
@@ -549,62 +595,93 @@ $lite->close();
 echo 'USR-DBPROBE OK root=', $version[0];
 '@.Replace('__SQLITE__', ($sqliteProbe -replace "'", '')) | Set-Content "$root\www\_ci_dbprobe.php" -NoNewline
 
-$env:PHP_SELECT = $defaultPhp
-Start-Process -FilePath $httpd -ArgumentList '-f', "$rootAbs\core\apache2\conf\httpd.conf", '-d', "$rootAbs\core\apache2" | Out-Null
-$resp = $null
-foreach ($i in 1..30) { Start-Sleep -Seconds 1; $resp = & curl.exe -fsS 'http://localhost:8088/_ci_dbprobe.php' 2>$null; if ($LASTEXITCODE -eq 0 -and $resp) { break } }
-# The controller's button opens the bare page: Adminer must log in as root by
-# itself and land on the server overview, which names the server version
-$jar = Join-Path ([IO.Path]::GetTempPath()) 'winpacho_ci_adminer.jar'
-if (Test-Path $jar) { Remove-Item $jar -Force }
-$adminerHtml = & curl.exe -fsS -L -c $jar -b $jar 'http://localhost:8088/us_opt1/' 2>$null
-# SQLite login: Adminer's own form with its CSRF token, password = root password
-$jarLite = "$jar-sqlite"
-$formHeaders = "$jar-headers"
-if (Test-Path $jarLite) { Remove-Item $jarLite -Force }
-$loginForm = (& curl.exe -sS -D $formHeaders -c $jarLite -b $jarLite 'http://localhost:8088/us_opt1/index.php?sqlite=' 2>$null) -join "`n"
-$adminerHeaders = if (Test-Path $formHeaders) { Get-Content $formHeaders } else { @() }
-$token = if ($loginForm -match "name=['""]token['""] value=['""]([^'""]+)") { $Matches[1] } else { '' }
-$liteHtml = & curl.exe -sS -L -c $jarLite -b $jarLite --data-urlencode 'auth[driver]=sqlite' --data-urlencode 'auth[username]=' `
-  --data-urlencode 'auth[password]=root' --data-urlencode "auth[db]=$sqliteProbe" --data-urlencode "token=$token" `
-  'http://localhost:8088/us_opt1/index.php?sqlite=' 2>$null
-Stop-SmokeApache
-$text = ($resp -join "`n")
-if ($text -notmatch "USR-DBPROBE OK root=$([regex]::Escape($dbVersion))-MariaDB") { throw "Smoke test: PHP could not use the database (want MariaDB $dbVersion): $text" }
-$adminerText = ($adminerHtml -join "`n")
-if ($adminerText -notmatch 'Adminer') { throw 'Smoke test: Adminer page did not render' }
-if ($adminerText -match 'auth\[password\]') { throw 'Smoke test: Adminer showed the login form instead of logging in as root' }
-if ($adminerText -notmatch [regex]::Escape($dbVersion)) { throw "Smoke test: Adminer page does not show server version $dbVersion" }
-$csp = ($adminerHeaders | Where-Object { $_ -match '^Content-Security-Policy:' }) -join ' '
-if (-not $csp) { throw 'Smoke test: Adminer sent no Content-Security-Policy header' }
-if ($csp -match 'adminer\.org') { throw "Smoke test: Adminer's CSP still allows adminer.org (version check): $csp" }
-if (-not $token) { throw 'Smoke test: no CSRF token in the Adminer login form' }
-if ((($liteHtml -join "`n") -notmatch 'ci_probe')) { throw 'Smoke test: Adminer SQLite login with the root password failed' }
-Remove-Item $sqliteProbe, $jar, $jarLite, $formHeaders -Force -ErrorAction SilentlyContinue
-# The Adminer logins left PHP sessions (and maybe Adminer's own files) in tmp - they must not ship
-if (Test-Path "$root\tmp") {
-  Get-ChildItem "$root\tmp" -File | Where-Object { $_.Name -like 'sess_*' -or $_.Name -like 'adminer*' } | Remove-Item -Force
+  $env:PHP_SELECT = $defaultPhp
+  Start-Process -FilePath $httpd -ArgumentList '-f', "$rootAbs\core\apache2\conf\httpd.conf", '-d', "$rootAbs\core\apache2" | Out-Null
+  $resp = $null
+  foreach ($i in 1..30) { Start-Sleep -Seconds 1; $resp = & curl.exe -fsS @CURL_LOCAL 'http://localhost:8088/_ci_dbprobe.php' 2>$null; if ($LASTEXITCODE -eq 0 -and $resp) { break } }
+  # The controller's button opens the bare page: Adminer must log in as root by
+  # itself and land on the server overview, which names the server version
+  $jar = Join-Path ([IO.Path]::GetTempPath()) 'winpacho_ci_adminer.jar'
+  if (Test-Path $jar) { Remove-Item $jar -Force }
+  $adminerHtml = & curl.exe -fsS @CURL_LOCAL -L -c $jar -b $jar 'http://localhost:8088/us_opt1/' 2>$null
+  # SQLite login: Adminer's own form with its CSRF token, password = root password
+  $jarLite = "$jar-sqlite"
+  $formHeaders = "$jar-headers"
+  if (Test-Path $jarLite) { Remove-Item $jarLite -Force }
+  $loginForm = (& curl.exe -sS @CURL_LOCAL -D $formHeaders -c $jarLite -b $jarLite 'http://localhost:8088/us_opt1/index.php?sqlite=' 2>$null) -join "`n"
+  $adminerHeaders = if (Test-Path $formHeaders) { Get-Content $formHeaders } else { @() }
+  $token = if ($loginForm -match "name=['""]token['""] value=['""]([^'""]+)") { $Matches[1] } else { '' }
+  $liteHtml = & curl.exe -sS -L @CURL_LOCAL -c $jarLite -b $jarLite --data-urlencode 'auth[driver]=sqlite' --data-urlencode 'auth[username]=' `
+    --data-urlencode 'auth[password]=root' --data-urlencode "auth[db]=$sqliteProbe" --data-urlencode "token=$token" `
+    'http://localhost:8088/us_opt1/index.php?sqlite=' 2>$null
+  Stop-SmokeApache
+  $text = ($resp -join "`n")
+  if ($text -notmatch "USR-DBPROBE OK root=$([regex]::Escape($Version))$VersionSuffix") { throw "Smoke test: PHP could not use the database (want $Engine $Version): $text" }
+  $adminerText = ($adminerHtml -join "`n")
+  if ($adminerText -notmatch 'Adminer') { throw "Smoke test ($Engine): Adminer page did not render" }
+  if ($adminerText -match 'auth\[password\]') { throw "Smoke test ($Engine): Adminer showed the login form instead of logging in as root" }
+  if ($adminerText -notmatch [regex]::Escape($Version)) { throw "Smoke test ($Engine): Adminer page does not show server version $Version" }
+  # The login form's hints name the active engine (read from core\mysql\us_opt.ini)
+  if ($loginForm -notmatch "winpacho - $Engine`:") { throw "Smoke test ($Engine): Adminer's login hints do not name $Engine" }
+  $csp = ($adminerHeaders | Where-Object { $_ -match '^Content-Security-Policy:' }) -join ' '
+  if (-not $csp) { throw 'Smoke test: Adminer sent no Content-Security-Policy header' }
+  if ($csp -match 'adminer\.org') { throw "Smoke test: Adminer's CSP still allows adminer.org (version check): $csp" }
+  if (-not $token) { throw 'Smoke test: no CSRF token in the Adminer login form' }
+  if ((($liteHtml -join "`n") -notmatch 'ci_probe')) { throw 'Smoke test: Adminer SQLite login with the root password failed' }
+  Remove-Item $sqliteProbe, $jar, $jarLite, $formHeaders -Force -ErrorAction SilentlyContinue
+  # The Adminer logins left PHP sessions (and maybe Adminer's own files) in tmp - they must not ship
+  if (Test-Path "$root\tmp") {
+    Get-ChildItem "$root\tmp" -File | Where-Object { $_.Name -like 'sess_*' -or $_.Name -like 'adminer*' } | Remove-Item -Force
+  }
+
+  & $mysqladm --host=127.0.0.1 --port=$env:MYSQL_TCP_PORT --user=root --password=root shutdown
+  if ($LASTEXITCODE -ne 0) { throw "Smoke test ($Engine): mysqladmin shutdown failed" }
+  if (-not $dbProc.WaitForExit(60000)) { $dbProc.Kill(); throw "Smoke test: $Engine did not stop within 60 s after shutdown" }
+  Remove-Item "$root\www\_ci_dbprobe.php" -Force
+  Remove-Item Env:\MYSQL_TCP_PORT
+  # The run's error log and pid file must not ship. MySQL also generated a TLS
+  # key pair (*.pem) and its server UUID (auto.cnf) on this first start - each
+  # installation must create its own, not share the build machine's.
+  foreach ($f in 'mysql.err', 'mysql.pid', 'auto.cnf') { Remove-Item "$root\core\mysql\data\$f" -Force -ErrorAction SilentlyContinue }
+  Get-ChildItem "$root\core\mysql\data" -File -Filter '*.pem' | Remove-Item -Force
+  if (Get-ChildItem "$root\core\mysql\data" -File -Filter '*.pem') { throw "Smoke test ($Engine): TLS key files (*.pem) left in core\mysql\data" }
+  Write-Host "   $Engine $Version OK - PHP connects, Adminer $adminerVer logs in as root and opens SQLite, clean shutdown"
 }
 
-& $mysqladm --host=127.0.0.1 --port=$env:MYSQL_TCP_PORT --user=root --password=root shutdown
-if ($LASTEXITCODE -ne 0) { throw 'Smoke test: mysqladmin shutdown failed' }
-if (-not $dbProc.WaitForExit(60000)) { $dbProc.Kill(); throw 'Smoke test: MariaDB did not stop within 60 s after shutdown' }
-Remove-Item "$root\www\_ci_dbprobe.php" -Force
-Remove-Item Env:\MYSQL_TCP_PORT
-# The run's error log and pid file must not ship
-foreach ($f in 'mysql.err', 'mysql.pid') { Remove-Item "$root\core\mysql\data\$f" -Force -ErrorAction SilentlyContinue }
-Write-Host "   MariaDB $dbVersion OK - PHP connects, Adminer $adminerVer logs in as root and opens SQLite, clean shutdown"
+# Swaps core\mysql and core\db_standby\<engine> exactly as the controller's
+# Switch database engine does (us_db_engine.pas): rename the folders.
+function Switch-DbEngine([string]$From, [string]$To) {
+  Move-Item "$root\core\mysql" (Join-Path $standbyRoot $From.ToLower()) -ErrorAction Stop
+  Move-Item (Join-Path $standbyRoot $To.ToLower()) "$root\core\mysql" -ErrorAction Stop
+}
+
+Test-DbEngine -Engine 'MariaDB' -Version $dbVersion -VersionSuffix '-MariaDB'
+Switch-DbEngine -From 'MariaDB' -To 'MySQL'
+try {
+  Test-DbEngine -Engine 'MySQL' -Version $mysqlVersion -VersionSuffix '$'
+} finally {
+  # A failed test may leave MySQL (or Apache) running with its files open: stop
+  # them first, or the swap back fails and hides the real error
+  Get-Process -Name mysqld_z -ErrorAction SilentlyContinue | Where-Object { $_.Path -like "$rootAbs\*" } | Stop-Process -Force
+  Stop-SmokeApache
+  Start-Sleep -Seconds 2
+  # MariaDB is the engine a fresh installation starts with
+  Move-Item "$root\core\mysql" $mysqlStandby -ErrorAction Stop
+  Move-Item "$standbyRoot\mariadb" "$root\core\mysql" -ErrorAction Stop
+}
+if ((Get-Content "$root\core\mysql\us_opt.ini" -Raw) -notmatch '(?m)^text = MariaDB') { throw 'After the smoke test core\mysql does not hold MariaDB' }
+if (Test-Path "$standbyRoot\mariadb") { throw 'After the smoke test core\db_standby\mariadb still exists' }
 
 # Splash page and www test page render (fork content) under the shipped default version
 $env:PHP_SELECT = $defaultPhp
 Start-Process -FilePath $httpd -ArgumentList '-f', "$rootAbs\core\apache2\conf\httpd.conf", '-d', "$rootAbs\core\apache2" | Out-Null
 $resp = $null
-foreach ($i in 1..30) { Start-Sleep -Seconds 1; $resp = & curl.exe -fsS 'http://localhost:8088/us_splash/index.php' 2>$null; if ($LASTEXITCODE -eq 0 -and $resp) { break } }
-$respWww = & curl.exe -fsS 'http://localhost:8088/index.php' 2>$null
+foreach ($i in 1..30) { Start-Sleep -Seconds 1; $resp = & curl.exe -fsS @CURL_LOCAL 'http://localhost:8088/us_splash/index.php' 2>$null; if ($LASTEXITCODE -eq 0 -and $resp) { break } }
+$respWww = & curl.exe -fsS @CURL_LOCAL 'http://localhost:8088/index.php' 2>$null
 Stop-SmokeApache
 if (($resp -join "`n") -notmatch 'winpacho') { throw 'Smoke test: splash page did not render fork content' }
 if (($respWww -join "`n") -notmatch 'winpacho') { throw 'Smoke test: www test page did not render fork content' }
-Write-Host "==> Smoke test passed: Apache $apVer, all PHP versions execute with OPcache and required extensions"
+Write-Host "==> Smoke test passed: Apache $apVer, all PHP versions execute with OPcache and required extensions, MariaDB $dbVersion and MySQL $mysqlVersion serve PHP and Adminer"
 
 # The smoke test's logs must not ship: empty log folder, rotation ring gone
 Remove-Item "$root\core\apache2\logs\rotated" -Recurse -Force -ErrorAction SilentlyContinue
@@ -633,6 +710,10 @@ foreach ($old in 'UniController.exe', 'UniService.exe', 'utils\UniService.exe', 
 }
 if ($listing -notcontains 'Path = utils\WinpachoService.exe') { throw 'Bundle layout broken: utils\WinpachoService.exe is missing' }
 if ($listing -notcontains 'Path = core\mysql\bin\mysqld_z.exe') { throw 'Bundle layout broken: core\mysql\bin\mysqld_z.exe (MariaDB) is missing' }
+foreach ($f in 'core\db_standby\mysql\bin\mysqld_z.exe', "core\db_standby\mysql\$STANDBY_PWD_FILE", 'core\db_standby\README.txt') {
+  if ($listing -notcontains "Path = $f") { throw "Bundle layout broken: $f (MySQL on standby) is missing" }
+}
+if ($listing | Where-Object { $_ -match '^Path = core\\(mysql|db_standby\\mysql)\\data\\.*\.pem$' }) { throw 'Bundle layout broken: TLS key files (*.pem) in a database data folder' }
 foreach ($f in 'adminer.php', 'index.php', 'winpacho-adminer.php', 'us_opt.ini') {
   if ($listing -notcontains "Path = home\us_opt1\$f") { throw "Bundle layout broken: home\us_opt1\$f (Adminer) is missing" }
 }
@@ -652,6 +733,7 @@ if ($listing7z -notcontains 'Path = WinpachoController.exe') { throw 'Bundle lay
 Add-Content 'dist\module-versions.txt' "winpacho $reloadVersion (base ZeroXV $baseVersion)"
 Add-Content 'dist\module-versions.txt' "Apache $apVer (bundle)"
 Add-Content 'dist\module-versions.txt' "MariaDB $dbVersion (bundle)"
+Add-Content 'dist\module-versions.txt' "MySQL $mysqlVersion (bundle)"
 Add-Content 'dist\module-versions.txt' "Adminer $adminerVer (bundle)"
 
 Get-Item 'dist\winpacho.zip', 'dist\winpacho.7z' | Format-List Name, Length

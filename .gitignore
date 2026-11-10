@@ -14,3 +14,17 @@ Thumbs.db
 # Local build-tool safety copies (e.g. tools/lazarus - a portable copy of the
 # Lazarus installation so local builds survive a broken C:\lazarus). Never committed.
 /tools/
+
+# Secrets and data that must never reach the repository (rule 27):
+# Claude Code stores approved commands verbatim here, passwords included
+.claude/settings.local.json
+# Local configuration with credentials, key files, databases and dumps
+.env
+*.env
+*.key
+*.pem
+*.p12
+*.pfx
+*.sql
+*.sqlite
+*.sqlite3

@@ -70,6 +70,7 @@ function us_valid_mysql_password(str:string):boolean;         // Test for valid 
 function us_valid_mysql_db_name(str:string):boolean;          // Test for valid format
 function us_valid_mysql_backup_file_name(str:string):boolean; // Test for valid format
 function us_start_mysql_skip_grants():boolean;                // Start MySQL no grants resturns true if started and ready.
+function us_start_mysql_with(const extra_param, root_password: string):boolean; // Start with one extra server option, true when ready for root
 
 //=== USER INPUT VALIDATION ===
 function valid_root_folder_name(root_folder_name:string;display_str:string): boolean;
@@ -1404,18 +1405,24 @@ end;
 
 
 {****************************************************************************
-us_start_mysql_skip_grants:
-  // Start MySQL no grants returns true if started and ready.
+us_start_mysql_with:
+  Starts the database server with its my.ini plus one extra option and
+  waits until it runs and answers root with root_password. Returns true
+  when ready, false (after a warning) when it did not start or answer.
+  Used for the root password repairs:
+   MariaDB: --skip-grant-tables (any password is accepted then)
+   MySQL:   --init-file=... (MySQL 8 turns TCP off with --skip-grant-tables,
+            so its repair runs the statements from an init file instead)
 
-  mysqld_z.exe --defaults-file="C:\winpacho\core\mysql\my.ini" --skip-grant-tables
+  mysqld_z.exe --defaults-file="C:\winpacho\core\mysql\my.ini" <extra_param>
 
   Changes:
   --------
   2019-09-07 : SudeepJD: Add in the --shared-memory for MySQL8
   2.2.0      : MariaDB only - the MySQL 8 --shared-memory switch is gone
+  2.4.0      : MariaDB and MySQL again; the option is a parameter
 =============================================================================}
-function us_start_mysql_skip_grants():boolean;
-
+function us_start_mysql_with(const extra_param, root_password: string):boolean;
 Var
  AProcess: TProcess;
  saftey_loop: Integer;
@@ -1429,7 +1436,7 @@ begin
 
     AProcess.Executable := US_MYSQL_BIN + '\' + MY_EXE_NAME;            // Executable to run
     AProcess.Parameters.Add('--defaults-file="' + USF_MYSQL_INI+ '"');  // Force use of default file
-    AProcess.Parameters.Add('--skip-grant-tables');                     // Start without privilege checks
+    AProcess.Parameters.Add(extra_param);                               // e.g. --skip-grant-tables
 
     AProcess.Options  := AProcess.Options + [poNoConsole];              // Set option no console
     AProcess.Execute;                                                   // Run command
@@ -1465,13 +1472,22 @@ begin
            Break;
          end;
       end;
-     Until MysqlServerReady('root'); //Note password not required this is just a dummy
+     Until MysqlServerReady(root_password);
    end;
 
- If Failed Then
-   us_start_mysql_skip_grants := False  // Unable to start or not ready
- Else
-   us_start_mysql_skip_grants := True;  // MySQL running and ready
+ us_start_mysql_with := not Failed;  // true: running and ready
+end;
+{--- End us_start_mysql_with ------------------------------------------------}
+
+{****************************************************************************
+us_start_mysql_skip_grants:
+  // Start MySQL no grants returns true if started and ready (MariaDB).
+  mysqld_z.exe --defaults-file="C:\winpacho\core\mysql\my.ini" --skip-grant-tables
+=============================================================================}
+function us_start_mysql_skip_grants():boolean;
+begin
+  // Without grant tables any password is accepted: 'root' is just a dummy
+  us_start_mysql_skip_grants := us_start_mysql_with('--skip-grant-tables', 'root');
 end;
 {--- End us_start_mysql_skip_grants -----------------------------------------}
 

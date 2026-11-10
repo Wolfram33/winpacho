@@ -2,7 +2,7 @@
 
 *Last updated: 2026-10-24*
 
-winpacho is a free, open-source, portable WAMP stack for Windows (Apache, MariaDB, PHP, Adminer and the WinpachoController / WinpachoService control programs). It is developed in the open at <https://github.com/Wolfram33/winpacho>.
+winpacho is a free, open-source, portable WAMP stack for Windows (Apache, MariaDB, MySQL, PHP, Adminer and the WinpachoController / WinpachoService control programs). It is developed in the open at <https://github.com/Wolfram33/winpacho>.
 
 **In short: winpacho does not collect, store or transmit any personal data. There is no telemetry, no usage statistics, no crash reporting, no account and no automatic update check.**
 
@@ -27,7 +27,7 @@ winpacho runs a web server on **your** machine. By default the database listens 
 
 ## 3. Bundled third-party components
 
-The bundle ships software from other vendors unchanged: Apache HTTP Server, MariaDB, PHP, Adminer, msmtp and OpenSSL. Their behaviour is governed by their own projects. One point worth knowing:
+The bundle ships software from other vendors unchanged: Apache HTTP Server, MariaDB, MySQL, PHP, Adminer, msmtp and OpenSSL. Their behaviour is governed by their own projects. One point worth knowing:
 
 * **Adminer** has a built-in version check that would ask `adminer.org` for the latest version number when you open it. winpacho switches it off in its Adminer entry page (`home\us_opt1\winpacho-adminer.php`) and removes adminer.org from Adminer's Content-Security-Policy, so the page makes no outside connection. (Up to 2.1.x the bundle shipped phpMyAdmin, whose version check asked `phpmyadmin.net` unless `$cfg['VersionCheck']` was set to `false`.)
 

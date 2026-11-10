@@ -39,9 +39,11 @@
 #   core\apache2\conf\httpd.conf, <Directory> blocks of home\us_opt1..3
 #       'Require local' instead of 'Require all granted': the database tool
 #       Adminer logs in by itself and must not be reachable from the network.
-#   core\mysql\my.ini is left alone: the MariaDB module ships it tuned. An
-#       installation that still runs MySQL (no longer supported since 2.2.0)
-#       gets a note on how to move to MariaDB.
+#   core\mysql\my.ini is left alone: the MariaDB and MySQL modules ship it
+#       tuned (both engines since 2.4.0; the MySQL one is recognised by its
+#       "second database engine" header). The my.ini of an older MySQL
+#       installation (bundles up to 1.3.5, MySQL module up to 2.1.x) stays as
+#       it is, with a note.
 param([Parameter(Mandatory = $true)][string]$Root)
 $ErrorActionPreference = 'Stop'
 
@@ -357,25 +359,27 @@ if ($limited) {
 }
 
 # =============================================================================
-# Database: MariaDB ships tuned
+# Database: both engines ship tuned
 # =============================================================================
-# The MariaDB module's my.ini already carries the server-load values (500
-# connections for 400 Apache threads, larger caches). Up to 2.1.x this section
-# also tuned a MySQL my.ini (bundles up to 1.3.5, the MySQL module) and named
-# the server in phpMyAdmin; since 2.2.0 MariaDB is the only engine and Adminer
-# the database tool, so a MySQL installation gets a note instead.
+# The my.ini of the MariaDB and the MySQL module already carries the
+# server-load values (500 connections for 400 Apache threads, larger caches).
+# Only the engine in core\mysql is looked at; the one on standby in
+# core\db_standby comes from the same modules.
 $myIni = Join-Path $Root 'core\mysql\my.ini'
 if (-not (Test-Path $myIni)) {
   Write-Host '==> core\mysql\my.ini not found - no database engine installed, nothing to do'
 }
-elseif ((Read-Text $myIni) -match 'MariaDB configuration for (Uniform Server Reload|winpacho)') {   # my.ini header before / after the 2.0 rename
-  Write-Host '==> MariaDB my.ini detected - it ships tuned, nothing to do'
+elseif ((Read-Text $myIni) -match 'MariaDB configuration for (Uniform Server Reload|winpacho)') {   # header before / after the 2.0 rename
+  Write-Host '==> MariaDB my.ini of winpacho detected - it ships tuned, nothing to do'
+}
+elseif ((Read-Text $myIni) -match "MySQL is the bundle's second database engine") {   # MySQL module since 2.4.0
+  Write-Host '==> MySQL my.ini of winpacho 2.4.0 or later detected - it ships tuned, nothing to do'
 }
 else {
-  Write-Host '==> core\mysql\my.ini is not the MariaDB one: this installation still runs MySQL, which winpacho'
-  Write-Host '    no longer supports (since 2.2.0). my.ini stays unchanged. Move to MariaDB as the README'
-  Write-Host '    describes in "Databases": back up every database, replace core\mysql with the MariaDB'
-  Write-Host '    module, restore the backups.'
+  Write-Host '==> core\mysql\my.ini comes from an older MySQL installation (bundles up to 1.3.5, MySQL module'
+  Write-Host '    up to 2.1.x). It stays unchanged. For the tuned engines of the current bundle back up your'
+  Write-Host '    databases, replace core\mysql with the MariaDB or MySQL module and restore the backups'
+  Write-Host '    (README, "Databases").'
 }
 
 Write-Host "==> Server tuning applied to $Root"

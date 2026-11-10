@@ -3,12 +3,13 @@
  * winpacho settings for Adminer, loaded by index.php through adminer_object().
  *
  * - Opening the page without parameters (the controller's Adminer button) logs in
- *   to the bundled MariaDB as root, with the password from htpasswd\mysql\passwd.txt
+ *   to the active database engine (MariaDB or MySQL, whichever sits in core\mysql)
+ *   as root, with the password from htpasswd\mysql\passwd.txt
  *   that WinpachoController keeps up to date - the comfort phpMyAdmin's
  *   auth_type 'config' offered before 2.2.0. Logging out leads to the normal
  *   login form, where SQLite or another server can be chosen.
  * - SQLite has no passwords of its own; Adminer refuses such logins unless it checks
- *   a password itself (Adminer\Password). winpacho uses the MariaDB root password.
+ *   a password itself (Adminer\Password). winpacho uses the database root password.
  * - No version check and no adminer.org in the Content-Security-Policy:
  *   winpacho makes no outside calls at run time.
  * The folder is reachable from this computer only (Require local in httpd.conf),
@@ -25,20 +26,36 @@ final class WinpachoAdminer extends Adminer\Plugin
     private const CONNECT_TIMEOUT_SEC = 1;    // local server: answers at once or not at all
     private const LOOPBACK_ADDRESSES = ['127.0.0.1', '::1'];
     private const LOCAL_HOST_NAMES = ['localhost', '127.0.0.1', '[::1]'];
+    private const ENGINES = ['MariaDB', 'MySQL'];   // names core\mysql\us_opt.ini may carry
+    private const DEFAULT_ENGINE = 'MariaDB';
 
     private string $server;
     private ?string $rootPassword;
     private bool $autoLogin;
-    private bool $mariadbDown;
+    private bool $serverDown;
     private bool $notLocal;
+    private string $engine;
 
-    private function __construct(string $server, ?string $rootPassword, bool $autoLogin, bool $mariadbDown, bool $notLocal)
+    private function __construct(string $server, ?string $rootPassword, bool $autoLogin, bool $serverDown, bool $notLocal)
     {
         $this->server = $server;
         $this->rootPassword = $rootPassword;
         $this->autoLogin = $autoLogin;
-        $this->mariadbDown = $mariadbDown;
+        $this->serverDown = $serverDown;
         $this->notLocal = $notLocal;
+        $this->engine = self::engineName();
+    }
+
+    /** Name of the active engine for the hints: core\mysql\us_opt.ini, written by the engine's module. */
+    private static function engineName(): string
+    {
+        $file = dirname(__DIR__, 2) . '/core/mysql/us_opt.ini';
+        if (!is_file($file) || !is_readable($file)) {
+            return self::DEFAULT_ENGINE;
+        }
+        $ini = parse_ini_file($file, true, INI_SCANNER_RAW);
+        $name = is_array($ini) ? trim((string) ($ini['USER']['text'] ?? '')) : '';
+        return in_array($name, self::ENGINES, true) ? $name : self::DEFAULT_ENGINE;
     }
 
     /** Request from this computer to one of its own names (localhost, loopback, the controller's server name). */
@@ -73,12 +90,12 @@ final class WinpachoAdminer extends Adminer\Plugin
         $trusted = self::isLocalRequest();
         // A login against a stopped server ends in Adminer's misleading
         // "Session expired"; the form says what is wrong instead.
-        $mariadbDown = $bare && $trusted && !self::isListening($port);
-        $autoLogin = $bare && $trusted && !$mariadbDown && $password !== null;
+        $serverDown = $bare && $trusted && !self::isListening($port);
+        $autoLogin = $bare && $trusted && !$serverDown && $password !== null;
         if ($autoLogin) {
             $_POST['auth'] = ['driver' => 'server', 'server' => $server, 'username' => 'root', 'password' => $password, 'db' => ''];
         }
-        $plugins = [new self($server, $password, $autoLogin, $mariadbDown, $bare && !$trusted)];
+        $plugins = [new self($server, $password, $autoLogin, $serverDown, $bare && !$trusted)];
         // password_hash() is deliberately slow, so only SQLite requests pay for it
         if ($password !== null && isset($_GET['sqlite'])) {
             $plugins[] = new Adminer\Password(password_hash($password, PASSWORD_DEFAULT));
@@ -86,7 +103,7 @@ final class WinpachoAdminer extends Adminer\Plugin
         return new Adminer\Plugins($plugins);
     }
 
-    /** MariaDB port: the controller passes it to Apache in MYSQL_TCP_PORT. */
+    /** Database port: the controller passes it to Apache in MYSQL_TCP_PORT. */
     private static function port(): int
     {
         $port = getenv('MYSQL_TCP_PORT');
@@ -162,28 +179,29 @@ final class WinpachoAdminer extends Adminer\Plugin
     public function loginForm()
     {
         $port = substr($this->server, strlen(self::DB_HOST) + 1);
+        $e = $this->engine;
         $lines = [
-            'winpacho - MariaDB: System "MySQL / MariaDB", Server ' . $this->server . ', Username root,'
-                . ' Password = the MariaDB root password (default root; change it in WinpachoController under'
-                . ' MariaDB > Change MariaDB password). The Adminer button of the controller logs in by itself.',
+            'winpacho - ' . $e . ': System "MySQL / MariaDB", Server ' . $this->server . ', Username root,'
+                . ' Password = the ' . $e . ' root password (default root; change it in WinpachoController under'
+                . ' ' . $e . ' > Change ' . $e . ' root password). The Adminer button of the controller logs in by itself.',
             'SQLite: System "SQLite", Database = full path of the database file (for example'
-                . ' C:\\winpacho\\www\\app\\data.sqlite), Username empty, Password = the same MariaDB root password.',
+                . ' C:\\winpacho\\www\\app\\data.sqlite), Username empty, Password = the same ' . $e . ' root password.',
         ];
         if ($this->notLocal) {
             $lines[] = 'No automatic login: this page was not opened from this computer as http://localhost/us_opt1/'
                 . ' (or the server name set in WinpachoController). Log in with the root password instead.';
         }
-        if ($this->mariadbDown) {
-            $lines[] = 'MariaDB is not running (nothing answers on ' . $this->server . '). Start it in WinpachoController'
-                . ' (Start MariaDB), then click the Adminer button again - or log in to SQLite below.';
+        if ($this->serverDown) {
+            $lines[] = $e . ' is not running (nothing answers on ' . $this->server . '). Start it in WinpachoController'
+                . ' (Start ' . $e . '), then click the Adminer button again - or log in to SQLite below.';
         }
         if ($this->rootPassword === null) {
             $lines[] = 'The password file htpasswd\\mysql\\passwd.txt could not be read, so the automatic login and'
-                . ' the SQLite login are off. Start WinpachoController once or set the MariaDB password again'
-                . ' (MariaDB > Change MariaDB password); both write the file.';
+                . ' the SQLite login are off. Start WinpachoController once or set the ' . $e . ' password again'
+                . ' (' . $e . ' > Change ' . $e . ' root password); both write the file.';
         }
         if ($port !== (string) self::DEFAULT_PORT) {
-            $lines[] = 'MariaDB runs on port ' . $port . ' in this installation (WinpachoController > MariaDB > Change MariaDB port).';
+            $lines[] = $e . ' runs on port ' . $port . ' in this installation (WinpachoController > ' . $e . ' > Change ' . $e . ' port).';
         }
         foreach ($lines as $line) {
             echo '<p class="message">' . htmlspecialchars($line, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8') . "</p>\n";

@@ -1,4 +1,4 @@
-# Weekly check whether Apache, PHP, MariaDB or Adminer have newer versions than
+# Weekly check whether Apache, PHP, MariaDB, MySQL or Adminer have newer versions than
 # the latest release ships. A failed run (GitHub mails it) means: build a new
 # release - see the run summary for which component and what to do.
 name: Upstream watch

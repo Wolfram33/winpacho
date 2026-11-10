@@ -1232,6 +1232,7 @@ procedure us_start_mysql_program;
 Var
  AProcess: TProcess;
  saftey_loop: Integer;
+ mysql_exe: string;
 begin
  if not MysqlRunning() then
   begin
@@ -1286,6 +1287,15 @@ begin
         end;
      end;
     Until MysqlRunning();
+
+    //=== MySQL 8 opens a console window despite poNoConsole, which stays on
+    //=== the desktop while the server runs: hide it (MariaDB opens none).
+    If (US_MYMAR_TXT = DB_ENGINE_MYSQL) And MysqlRunning() Then
+     begin
+       sleep(1000);
+       mysql_exe := US_MYSQL_BIN + '\' + MY_EXE_NAME;
+       ShowWindow(FindWindow(nil,PChar(mysql_exe)),SW_HIDE);
+     end;
   end;
 end;
 {--- End us_start_mysql_program --------------------------------------------}
@@ -1709,12 +1719,65 @@ mysql_restore_root_password:
   2.2.0      : MariaDB only, root only (the MySQL branch and the phpMyAdmin control
                user 'pma' are gone). root gets WITH GRANT OPTION back, which
                Create restricted user needs and the old restore left out.
+  2.4.0      : MySQL is the bundle's second engine again: mysql_restore_root_password_mysql.
 =============================================================================}
+
+{=============================================================================
+mysql_restore_root_password_mysql:
+ The MySQL 8 counterpart of the restore below. MySQL turns TCP off while it
+ runs with --skip-grant-tables, so instead the server starts normally with
+ --init-file: it runs the statements in mysql-init.txt with full privileges
+ before it accepts connections (the way MySQL documents for a lost root
+ password on Windows). Readiness is checked with the restored password
+ 'root', which proves the repair; then a clean shutdown.
+=============================================================================}
+procedure mysql_restore_root_password_mysql;
+var
+  FileVar1 : TextFile;  // Text File handle
+begin
+  us_kill_mysql_program;                    // Check server running. If running kill it
+
+  // Root missing, locked, other password, privileges taken away: all repaired.
+  // caching_sha2_password is the MySQL 8.4 default plugin.
+  Assign(FileVar1,USF_MYSQL_TEMP_SQL);
+  ReWrite(FileVar1);
+  Writeln(FileVar1, 'CREATE USER IF NOT EXISTS ''root''@''localhost'' IDENTIFIED BY ''root'';');
+  Writeln(FileVar1, 'ALTER USER ''root''@''localhost'' IDENTIFIED WITH caching_sha2_password BY ''root'' ACCOUNT UNLOCK;');
+  Writeln(FileVar1, 'GRANT ALL ON *.* TO ''root''@''localhost'' WITH GRANT OPTION;');
+  CloseFile(FileVar1);
+
+  If us_start_mysql_with('--init-file="' + USF_MYSQL_TEMP_SQL + '"', 'root') Then
+    Begin
+      us_save_mysql_password('root');        // the clean stop reads the password file
+      MY_PWD := 'root';
+      us_clean_stop_mysql_program;           // without --init-file the next start is a normal one
+      us_MessageDlg(US_MYMAR_TXT+' Info',US_MYMAR_TXT+' root user restored (password: root)', mtcustom,[mbOk],0);
+    End
+  Else
+    Begin
+      us_kill_mysql_program;                 // may run without answering root
+      us_MessageDlg(US_MYMAR_TXT+' Info','Failed to restore root user. No action taken.' + sLineBreak +
+                    'The cause is in the error log: ' + US_MYMAR_TXT + ' > ' + US_MYMAR_TXT + ' error log.', mtcustom,[mbOk],0);
+    End;
+
+  // Holds the statements: a file left behind would run again at a start
+  // with --init-file only, but it should not linger
+  If FileExists(USF_MYSQL_TEMP_SQL) and not DeleteFile(Pchar(USF_MYSQL_TEMP_SQL)) Then
+    us_MessageDlg('Warning', 'Could not delete ' + USF_MYSQL_TEMP_SQL + sLineBreak +
+                  'Please delete it by hand.', mtWarning, [mbOk], 0);
+end;
+{---End mysql_restore_root_password_mysql -----------------------------------}
+
 procedure mysql_restore_root_password;
 var
   FileVar1 : TextFile;  // Text File handle
   AProcess : TProcess;  // Process handle
 begin
+  If US_MYMAR_TXT = DB_ENGINE_MYSQL Then
+    begin
+      mysql_restore_root_password_mysql;
+      Exit;
+    end;
 
   //1==Kill server
   us_kill_mysql_program;                    // Check server running. If running kill it

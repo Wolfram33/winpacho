@@ -23,21 +23,36 @@ if (file_exists($file) && is_readable($file)){   // Check file
   }
 }
 
-// Database engine: the bundle build stamps DatabaseVersion (e.g. "MariaDB 11.8.9")
-// into us_config.ini. Without it (engine module installed by hand) fall back to
-// the flavour file the controller reads, so the page never names the wrong engine.
+// Database engine: the flavour file of the engine in core\mysql names it and,
+// since 2.4.0, its full version (release). It moves with the engine when the
+// controller switches between MariaDB and MySQL, so the page always names the
+// active one. Older installations: the DatabaseVersion the bundle build stamped
+// into us_config.ini up to 2.3.x, then name and major version.
+$db_name = "";
+$db_release = "";
+$db_major = "";
+$opt_file = "$root/core/mysql/us_opt.ini";
+$opt = is_readable($opt_file) ? parse_ini_file($opt_file, true, INI_SCANNER_RAW) : false;
+if (is_array($opt) && isset($opt["USER"]["text"])){
+  $db_name    = trim((string)$opt["USER"]["text"]);
+  $db_release = trim((string)($opt["USER"]["release"] ?? ""));
+  $db_major   = trim((string)($opt["USER"]["version"] ?? ""));
+}
 $db_ver = "";
-if ($settings !== false && isset($settings["APP"]["DatabaseVersion"])){
+if ($db_name !== "" && $db_release !== "" && strpos($db_release, "{") === false){
+  $db_ver = "$db_name $db_release";
+} elseif ($settings !== false && isset($settings["APP"]["DatabaseVersion"])){
   $db_ver = trim((string)$settings["APP"]["DatabaseVersion"]);
 }
-if ($db_ver === ""){
-  $opt = @parse_ini_file("$root/core/mysql/us_opt.ini", true);
-  if ($opt !== false && isset($opt["USER"]["text"])){
-    $db_ver = trim((string)$opt["USER"]["text"]);
-    if (isset($opt["USER"]["version"])) $db_ver .= " " . trim((string)$opt["USER"]["version"]);
-  }
-}
+if ($db_ver === "" && $db_name !== "") $db_ver = trim("$db_name $db_major");
 if ($db_ver === "") $db_ver = "Database engine not installed";
+$db_label = $db_name !== "" ? $db_name : "MariaDB/MySQL";
+
+// The other engine waits in core\db_standby (bundles from 2.4.0 on)
+$db_standby = "";
+foreach (array("mariadb" => "MariaDB", "mysql" => "MySQL") as $dir => $name) {
+  if ($name !== $db_name && is_file("$root/core/db_standby/$dir/bin/mysqld_z.exe")) $db_standby = $name;
+}
 
 // Database tool: the version from the header of the upstream Adminer file
 $tool_file = "$root/home/us_opt1/adminer.php";
@@ -115,12 +130,15 @@ $apache_ver  = function_exists('apache_get_version') ? apache_get_version() : 'A
         </ul>
         <h3>Database</h3>
         <ul>
-          <li><strong><?php print us_h($db_ver); ?></strong></li>
+          <li><strong><?php print us_h($db_ver); ?></strong> (active)</li>
+<?php if ($db_standby !== "") { ?>
+          <li><?php print us_h($db_standby); ?> on standby &mdash; switch in the controller: <em><?php print us_h($db_label); ?> &gt; Switch database engine to <?php print us_h($db_standby); ?></em></li>
+<?php } ?>
           <li>SQLite through PHP (sqlite3, pdo_sqlite) &mdash; no server needed</li>
         </ul>
         <h3>Database Admin</h3>
         <ul>
-          <li><strong><a href="/us_opt1/"><?php print us_h($tool_ver); ?></a></strong> &mdash; MariaDB and SQLite, this computer only. Button <em>Adminer</em> in the controller logs in to MariaDB by itself; for SQLite see <a href="/us_docs/manual/index.html#sqlite">SQLite files in Adminer</a> in the documentation</li>
+          <li><strong><a href="/us_opt1/"><?php print us_h($tool_ver); ?></a></strong> &mdash; <?php print us_h($db_label); ?> and SQLite, this computer only. Button <em>Adminer</em> in the controller logs in to <?php print us_h($db_label); ?> by itself; for SQLite see <a href="/us_docs/manual/index.html#sqlite">SQLite files in Adminer</a> in the documentation</li>
         </ul>
       </section>
 
@@ -147,7 +165,7 @@ $apache_ver  = function_exists('apache_get_version') ? apache_get_version() : 'A
   <footer>
     <p class="footer-links"><a target="_1" rel="noopener" href="https://github.com/Wolfram33/winpacho">GitHub Repository</a> | <a target="_1" rel="noopener" href="https://github.com/Wolfram33/winpacho/releases/tag/latest">Latest Downloads</a> | <a target="_1" rel="noopener" href="https://github.com/Wolfram33/winpacho/issues">Issues / Support</a> | <a href="/us_docs/manual/index.html">Local Documentation</a></p>
     <p><a class="donate" target="_1" rel="noopener" href="https://www.paypal.com/paypalme/robderoy"><span aria-hidden="true">&#9829;</span> Donate via PayPal</a></p>
-    <p>winpacho is a portable WAMP package for Windows (64-bit): unpack it anywhere and Apache, MySQL and PHP are ready to run &mdash; no installation, no registry entries, no external dependencies. Updated builds with current PHP versions are published automatically on the <a target="_1" rel="noopener" href="https://github.com/Wolfram33/winpacho/releases/tag/latest">releases page</a>.</p>
+    <p>winpacho is a portable WAMP package for Windows (64-bit): unpack it anywhere and Apache, MariaDB or MySQL and PHP are ready to run &mdash; no installation, no registry entries, no external dependencies. Updated builds with current PHP versions are published automatically on the <a target="_1" rel="noopener" href="https://github.com/Wolfram33/winpacho/releases/tag/latest">releases page</a>.</p>
     <p class="credits">Originally developed by <a target="_1" rel="noopener" href="https://www.uniformserver.com/">The Uniform Server Development Team</a> &mdash; winpacho (formerly Uniform Server Reload) initiated by Rob de Roy</p>
   </footer>
 </div>

@@ -2,11 +2,14 @@ unit us_gui_style_dlg;
 
 {#############################################################################
 '# Name: us_gui_style_dlg.pas
-'# First-start choice of the controller's window look: classic window or
-'# modern medallion. Two coloured cards, each with a small preview, a short
-'# explanation and its own button, so the choice is clear before the main
-'# window ever appears. Built in code (no .lfm) because it is shown once.
-'# The same choice stays available in the menu General > Window look.
+'# First-start choices: the controller's window look (classic window or
+'# modern medallion) and - when the bundle ships both - the database engine
+'# that starts by default (MariaDB or MySQL). Two coloured cards for the
+'# look, each with a small preview, a short explanation and its own button
+'# that also confirms the engine picked in the green band above them, so
+'# both choices are clear before the main window ever appears. Built in
+'# code (no .lfm) because it is shown once. Both stay changeable later:
+'# General > Window look and the database menu's Switch database engine.
 '#############################################################################}
 
 {$mode objfpc}{$H+}
@@ -18,8 +21,11 @@ uses
   LCLType, us_buttons, us_medallion, default_config_vars;
 
 { Shows the dialog. Result: GUI_CLASSIC, GUI_MODERN, or '' when the user
-  closed it without choosing (Esc / title bar x). }
-function us_ask_gui_style: string;
+  closed it without choosing (Esc / title bar x).
+  AStandbyEngine: the engine waiting in core\db_standby, or '' when there is
+  none - then the engine band is left out. AEngine returns the engine the
+  user wants active (AActiveEngine when nothing was chosen). }
+function us_ask_gui_style(const AActiveEngine, AStandbyEngine: string; out AEngine: string): string;
 
 implementation
 
@@ -33,10 +39,15 @@ const
   MODERN_HEAD_COLOR   = TColor($4DB7FF); // #FFB74D orange, 8.3:1 on graphite
   MODERN_TEXT_COLOR   = TColor($EDEAE8); // #E8EAED light grey
   FOOTER_TEXT_COLOR   = TColor($514137); // #374151 on white
+  ENGINE_BAND_COLOR   = TColor($E9F5E8); // #E8F5E9 light green
+  ENGINE_HEAD_COLOR   = TColor($205E1B); // #1B5E20 dark green, 7.9:1 on the band
+  ENGINE_TEXT_COLOR   = TColor($372A1F); // #1F2A37 near black
 
   // Layout in 96-dpi units, scaled to the screen in S()
   DLG_WIDTH   = 600;
-  CARD_TOP    = 96;
+  HEADER_H    = 80;
+  CARD_TOP    = 96;   // without the engine band
+  ENGINE_BAND_H = 128;
   CARD_WIDTH  = 270;
   CARD_HEIGHT = 324;
   CARD_GAP    = 20;
@@ -48,7 +59,13 @@ type
 
   TGuiStyleDlg = class(TForm)
   private
-    FChoice : string;
+    FChoice  : string;
+    FCardTop : Integer;          // 96-dpi units: below the header, or below the engine band
+    FEngine  : string;           // engine active now; the radio buttons may change it
+    FEngineRadio : array[0..1] of TRadioButton;
+    FEngineName  : array[0..1] of string;
+    procedure AddEngineBand(const AActiveEngine, AStandbyEngine: string);
+    function ChosenEngine: string;
     procedure ClassicClick(Sender: TObject);
     procedure ModernClick(Sender: TObject);
     procedure SketchPaint(Sender: TObject);
@@ -59,8 +76,9 @@ type
     function AddCard(ALeft: Integer; AColor: TColor): TPanel;
     function CoinPreview(ASize: Integer; ABackground: TColor): Graphics.TBitmap;
   public
-    constructor CreateDlg;
+    constructor CreateDlg(const AActiveEngine, AStandbyEngine: string);
     property Choice: string read FChoice;
+    property Engine: string read ChosenEngine;
   end;
 
 function TGuiStyleDlg.S(AValue: Integer): Integer;
@@ -91,7 +109,59 @@ begin
   Result.BevelOuter  := bvNone;
   Result.ParentColor := False;
   Result.Color       := AColor;
-  Result.SetBounds(S(ALeft), S(CARD_TOP), S(CARD_WIDTH), S(CARD_HEIGHT));
+  Result.SetBounds(S(ALeft), S(FCardTop), S(CARD_WIDTH), S(CARD_HEIGHT));
+end;
+
+{ What each engine is good for, in the words of the radio button. }
+function EngineDescription(const AEngine: string): string;
+begin
+  if AEngine = DB_ENGINE_MYSQL then
+    Result := 'MySQL 8.4 - when your web hosting runs MySQL, or for apps with many JSON columns'
+  else if AEngine = DB_ENGINE_MARIADB then
+    Result := 'MariaDB - free and light, runs the usual PHP apps made for MySQL'
+  else
+    Result := AEngine;
+end;
+
+{Green band between header and cards: which engine starts by default. The
+ active engine comes first and is preselected, so pressing a card button
+ right away keeps the installation as shipped.}
+procedure TGuiStyleDlg.AddEngineBand(const AActiveEngine, AStandbyEngine: string);
+var
+  band : TPanel;
+  i    : Integer;
+begin
+  band := TPanel.Create(Self);
+  band.Parent      := Self;
+  band.BevelOuter  := bvNone;
+  band.ParentColor := False;
+  band.Color       := ENGINE_BAND_COLOR;
+  band.SetBounds(S(CARD_GAP), S(HEADER_H + 12), S(DLG_WIDTH - 2 * CARD_GAP), S(ENGINE_BAND_H - 20));
+  AddLabel(band, '1. Database engine that starts by default', 8, 22, ENGINE_HEAD_COLOR, True, 11);
+
+  FEngineName[0] := AActiveEngine;
+  FEngineName[1] := AStandbyEngine;
+  for i := 0 to 1 do
+  begin
+    FEngineRadio[i] := TRadioButton.Create(Self);
+    FEngineRadio[i].Parent     := band;
+    FEngineRadio[i].SetBounds(S(14), S(32 + i * 24), band.ClientWidth - S(28), S(22));
+    FEngineRadio[i].Caption    := EngineDescription(FEngineName[i]);
+    FEngineRadio[i].Font.Color := ENGINE_TEXT_COLOR;
+    FEngineRadio[i].Font.Size  := 9;
+    FEngineRadio[i].Checked    := (i = 0);
+  end;
+  AddLabel(band, 'Each engine keeps its own databases. Switch later: database menu > Switch database engine.',
+           82, 22, ENGINE_TEXT_COLOR, False, 9);
+end;
+
+function TGuiStyleDlg.ChosenEngine: string;
+var
+  i: Integer;
+begin
+  Result := FEngine;
+  for i := 0 to 1 do
+    if (FEngineRadio[i] <> nil) and FEngineRadio[i].Checked then Result := FEngineName[i];
 end;
 
 {The medallion artwork, scaled down, with everything outside the coin
@@ -202,7 +272,7 @@ begin
   end;
 end;
 
-constructor TGuiStyleDlg.CreateDlg;
+constructor TGuiStyleDlg.CreateDlg(const AActiveEngine, AStandbyEngine: string);
 var
   header, card : TPanel;
   sketch       : TPaintBox;
@@ -214,7 +284,10 @@ begin
   inherited CreateNew(nil);
   Scaled       := False;   // sizes below are already scaled to the screen in S()
   FChoice      := '';
-  Caption      := 'winpacho - choose the window look';
+  FEngine      := AActiveEngine;
+  FCardTop     := CARD_TOP;
+  if AStandbyEngine <> '' then FCardTop := CARD_TOP + ENGINE_BAND_H;
+  Caption      := 'winpacho - first start';
   BorderStyle  := bsDialog;
   Position     := poScreenCenter;
   Color        := clWhite;
@@ -223,19 +296,26 @@ begin
   KeyPreview   := True;
   OnKeyDown    := @DlgKeyDown;
   ClientWidth  := S(DLG_WIDTH);
-  ClientHeight := S(CARD_TOP + CARD_HEIGHT + 56);
+  ClientHeight := S(FCardTop + CARD_HEIGHT + 56);
 
   //--- Blue header band
   header := TPanel.Create(Self);
   header.Parent      := Self;
-  header.SetBounds(0, 0, ClientWidth, S(80)); // width before the labels size themselves to it
+  header.SetBounds(0, 0, ClientWidth, S(HEADER_H)); // width before the labels size themselves to it
   header.Align       := alTop;
   header.BevelOuter  := bvNone;
   header.ParentColor := False;
   header.Color       := HEADER_COLOR;
   AddLabel(header, 'Welcome to winpacho', 12, 28, clWhite, True, 14);
-  AddLabel(header, 'How should the control window look? Both looks offer exactly the same functions.',
-           44, 24, clWhite, False, 10);
+  if AStandbyEngine = '' then
+    AddLabel(header, 'How should the control window look? Both looks offer exactly the same functions.',
+             44, 24, clWhite, False, 10)
+  else
+  begin
+    AddLabel(header, 'Two choices: the database engine, then the window look (its button starts winpacho).',
+             44, 24, clWhite, False, 10);
+    AddEngineBand(AActiveEngine, AStandbyEngine);
+  end;
 
   //--- Classic card (light blue, sketch of the window)
   card := AddCard(CARD_GAP, CLASSIC_CARD_COLOR);
@@ -281,21 +361,26 @@ begin
   btn.OnClick   := @ModernClick;
 
   //--- Where to change it later
-  lbl := AddLabel(Self, 'You can switch at any time: menu General > Window look.',
-                  CARD_TOP + CARD_HEIGHT + 16, 24, FOOTER_TEXT_COLOR, False, 10);
+  lbl := AddLabel(Self, 'You can switch the look at any time: menu General > Window look.',
+                  FCardTop + CARD_HEIGHT + 16, 24, FOOTER_TEXT_COLOR, False, 10);
   lbl.Alignment := taCenter;
 
   ActiveControl := first;
 end;
 
-function us_ask_gui_style: string;
+function us_ask_gui_style(const AActiveEngine, AStandbyEngine: string; out AEngine: string): string;
 var
   dlg: TGuiStyleDlg;
 begin
-  Result := '';
-  dlg := TGuiStyleDlg.CreateDlg;
+  Result  := '';
+  AEngine := AActiveEngine;
+  dlg := TGuiStyleDlg.CreateDlg(AActiveEngine, AStandbyEngine);
   try
-    if dlg.ShowModal = mrOK then Result := dlg.Choice;
+    if dlg.ShowModal = mrOK then
+    begin
+      Result  := dlg.Choice;
+      AEngine := dlg.Engine;
+    end;
   finally
     dlg.Free;
   end;

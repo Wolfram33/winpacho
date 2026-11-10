@@ -1,14 +1,20 @@
-# Helpers for the database module packaging script
-# (package-mariadb-module.ps1). Dot-source it:
+# Helpers for the database module packaging scripts
+# (package-mariadb-module.ps1, package-mysql-module.ps1). Dot-source it:
 #   . "$PSScriptRoot\db-module-common.ps1"
 #
 # The recipe: unpack the vendor zip, initialize a data directory, run a
 # temporary server once to check the root login, shut it down cleanly,
 # then arrange the files in the core\mysql layout the controller expects
 # and zip them as a winpacho module. The engine-specific parts (download
-# source, init command, which binaries) stay in the packaging script.
-# Until 2.1.x a MySQL module shared these helpers; since 2.2.0 MariaDB is
-# the only engine (the folder keeps the historic name core\mysql).
+# source, init command, which binaries) stay in the packaging scripts.
+# Both engines use the same layout (the folder keeps the historic name
+# core\mysql): the bundle ships both since 2.4.0, the active one in
+# core\mysql and the other in core\db_standby\<engine>.
+
+# Time limits for every download: a hanging server must not block the CI job
+# until GitHub kills it. Pages and API answers are small, archives are not.
+$CURL_PAGE     = @('--connect-timeout', '30', '--max-time', '120', '--retry', '3')
+$CURL_DOWNLOAD = @('--connect-timeout', '30', '--max-time', '900', '--retry', '3')
 
 # The engines create files such as
 # data\sys\x@0024statements_with_runtimes_in_95th_percentile.frm~ during
@@ -100,13 +106,14 @@ function Clear-DbDataDirRunFiles([string]$DataDir) {
 }
 
 # The flavour files the controller reads: my.ini, us_opt.ini (server name
-# and major version for captions and menus), the root password file.
+# and major version for captions and menus, full version for the splash
+# page), the root password file.
 function Write-DbModuleConfig([string]$ModuleDir, [string]$RepoRoot, [string]$Flavor, [string]$Version, [string]$MyIniName) {
   $core = Join-Path $ModuleDir 'core\mysql'
   Copy-Item (Join-Path $RepoRoot "bundle\db\$MyIniName") (Join-Path $core 'my.ini') -Force
   $major = ($Version -split '\.')[0]
   $opt = Get-Content (Join-Path $RepoRoot 'bundle\db\us_opt.ini') -Raw
-  $opt = $opt -replace '\{TEXT\}', $Flavor -replace '\{MAJOR\}', $major
+  $opt = $opt -replace '\{TEXT\}', $Flavor -replace '\{MAJOR\}', $major -replace '\{VERSION\}', $Version
   Set-Content (Join-Path $core 'us_opt.ini') -Value $opt -NoNewline
   New-Item -ItemType Directory -Force (Join-Path $ModuleDir 'htpasswd\mysql') | Out-Null
   Set-Content (Join-Path $ModuleDir 'htpasswd\mysql\passwd.txt') -Value 'root' -NoNewline

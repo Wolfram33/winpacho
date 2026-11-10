@@ -11,7 +11,7 @@ unit mysql_edit_restricted_user_form;
 interface
 
 uses
-  Classes, SysUtils, FileUtil, Forms, Controls, Graphics, Dialogs, StdCtrls,
+  Classes, SysUtils, StrUtils, FileUtil, Forms, Controls, Graphics, Dialogs, StdCtrls,
   us_common_procedures,
   us_common_functions,
   default_config_vars;
@@ -104,12 +104,16 @@ begin
   mysql_edit_restricted_user.ListBox1.Items.Clear; //Clear list box
 
     //Scan returned list and add to ListBox1
-    //Exclude MySQL users listed. We dont want a user to delete these
+    //Exclude MySQL users listed. We dont want a user to delete these.
+    //The engines' own system accounts start with 'mysql.' (MySQL 8:
+    //mysql.sys, mysql.session, mysql.infoschema) or 'mariadb.' (mariadb.sys)
     for i:=0 to sList.Count-1 do
       begin
        if     not (sList[i]= 'user')
           and not (sList[i]= 'pma')
-          and not (sList[i]= 'root') then
+          and not (sList[i]= 'root')
+          and not AnsiStartsText('mysql.', sList[i])
+          and not AnsiStartsText('mariadb.', sList[i]) then
           begin
              //Add filtered users to listbox
              mysql_edit_restricted_user.ListBox1.Items.Add(sList[i]);

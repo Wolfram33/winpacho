@@ -46,7 +46,7 @@ if ($Zip) {
   $zipFile = (Resolve-Path $Zip).Path
   Write-Host "==> Using local $zipFile (MariaDB $ver)"
 } else {
-  $majorsJson = & curl.exe -fsSL 'https://downloads.mariadb.org/rest-api/mariadb/'
+  $majorsJson = & curl.exe -fsSL @CURL_PAGE 'https://downloads.mariadb.org/rest-api/mariadb/'
   if ($LASTEXITCODE -ne 0) { throw 'Could not query MariaDB REST API' }
   $majors = ($majorsJson | ConvertFrom-Json).major_releases
   $lts = $majors |
@@ -57,7 +57,7 @@ if ($Zip) {
   if (-not $lts) { throw 'No stable MariaDB LTS release found in REST API' }
   Write-Host "==> MariaDB LTS series $($lts.release_id) (supported until $($lts.release_eol_date))"
 
-  $relJson = & curl.exe -fsSL "https://downloads.mariadb.org/rest-api/mariadb/$($lts.release_id)/latest/"
+  $relJson = & curl.exe -fsSL @CURL_PAGE "https://downloads.mariadb.org/rest-api/mariadb/$($lts.release_id)/latest/"
   if ($LASTEXITCODE -ne 0) { throw 'Could not query MariaDB release listing' }
   $releases = ($relJson | ConvertFrom-Json).releases
   $release = $releases.PSObject.Properties.Value | Select-Object -First 1
@@ -68,7 +68,7 @@ if ($Zip) {
   if (-not $file) { throw "No winx64 ZIP found for MariaDB $ver" }
 
   Write-Host "==> Downloading $($file.file_name) (MariaDB $ver)"
-  & curl.exe -fsSL -o mariadb.zip $file.file_download_url
+  & curl.exe -fsSL @CURL_DOWNLOAD -o mariadb.zip $file.file_download_url
   if ($LASTEXITCODE -ne 0) { throw 'MariaDB download failed' }
   if ((Get-Item mariadb.zip).Length -lt 50MB) { throw 'MariaDB download suspiciously small' }
   $zipFile = 'mariadb.zip'
