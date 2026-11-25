@@ -34,7 +34,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 100
     steps:
-      - uses: actions/checkout@v5
+      # Credentials stay in the checkout (unlike build.yml): the script pushes
+      # the version bump commit and the tag
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Release when a build would ship newer components
         shell: pwsh
         env:
