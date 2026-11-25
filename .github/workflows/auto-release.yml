@@ -1,0 +1,43 @@
+# On the 1st of each month: when a build would ship a newer Apache, PHP,
+# MariaDB, MySQL or Adminer than the latest release, raise the PATCH version
+# (2.4.0 -> 2.4.1), tag it and build the release - see scripts/auto-release.ps1.
+# A failed run (GitHub mails it) means the release did not come out; the run
+# summary says why and what to do.
+# For an urgent security update do not wait for the 1st:
+# Actions > Monthly auto release > Run workflow.
+name: Monthly auto release
+
+on:
+  schedule:
+    - cron: '0 7 1 * *'   # 1st of the month, 07:00 UTC
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run: only report what would be released, change nothing'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write   # push the version bump commit and the tag
+  actions: write    # start the Build workflow for the tag
+
+# Two runs at once would both raise the version
+concurrency:
+  group: auto-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    # Releases come from the default branch only (the schedule always runs
+    # there); started by hand on another branch, the job is skipped
+    if: github.event_name == 'schedule' || github.ref_name == github.event.repository.default_branch
+    runs-on: ubuntu-latest
+    timeout-minutes: 100
+    steps:
+      - uses: actions/checkout@v5
+      - name: Release when a build would ship newer components
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ./scripts/auto-release.ps1 -Repo '${{ github.repository }}' -DryRun:$${{ inputs.dry_run == true }}

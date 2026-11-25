@@ -238,7 +238,9 @@ jobs:
 
   release:
     name: Publish release
-    if: github.event_name == 'push'
+    # Every push, and a v* tag started by hand or by scripts/auto-release.ps1
+    # (a tag pushed with the workflow token triggers no push event)
+    if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/tags/v'))
     needs: [build, package-php-modules, bundle, package-mariadb-module, package-mysql-module]
     runs-on: ubuntu-latest
     timeout-minutes: 30

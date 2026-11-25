@@ -85,6 +85,8 @@ winpacho follows its **own version line starting at 1.0.0** (`MAJOR.MINOR.PATCH`
 
 Release procedure: bump the version in `reload_version.inc`, commit, tag the commit `vX.Y.Z`, push branch and tag — CI builds, verifies and publishes the versioned release.
 
+**Component updates release themselves.** On the 1st of each month the workflow *Monthly auto release* checks whether a build would ship a newer Apache, PHP, MariaDB, MySQL or Adminer than the latest release. If so it raises **PATCH** (`2.4.0` → `2.4.1`), commits, tags and publishes the release; if not, nothing happens. MINOR and MAJOR stand for changes to winpacho itself and are only raised by hand. For an urgent security update start it right away: *Actions → Monthly auto release → Run workflow* (tick *Dry run* to only see what would be released). The bump arrives as a commit by `github-actions[bot]`, so run `git pull` before your next commit. It releases the default branch as it is, including commits made since the last release. While `reload_version.inc` holds a version that is not released yet, the automation leaves the branch alone — bump the version first when work on the branch must not go out yet.
+
 ## HTTPS (`https://localhost` without browser warning)
 
 The controller generates a self-signed `localhost` certificate on first start and enables SSL automatically — `https://localhost` works right away, but browsers mark self-signed certificates as "not secure" until they are trusted. To get the padlock without a warning:

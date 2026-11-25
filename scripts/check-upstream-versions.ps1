@@ -1,20 +1,29 @@
 # Compare the component versions of the latest winpacho release with
 # the newest upstream versions. Run weekly by .github/workflows/upstream-watch.yml;
-# a non-zero exit (= failed run, GitHub sends a mail) means: build a new
-# release. Locally: pwsh scripts/check-upstream-versions.ps1
+# a non-zero exit (= failed run, GitHub sends a mail) means: an update is out
+# and waits for the next release. Locally: pwsh scripts/check-upstream-versions.ps1
 #
 # The build scripts already fetch the newest PHP/MariaDB/MySQL/Adminer/Apache, so a
-# version bump + tag is normally all an update takes. Only for Apache the
-# patch-level floor $MinApachePatch in build-bundle.ps1 should be raised too.
+# version bump + tag is all an update takes. scripts/auto-release.ps1 does that
+# on the 1st of each month and uses this script to decide (-Buildable -PassThru).
 #
 # Exit codes: 0 = up to date, 1 = updates available, 2 = a check failed
 # (a failed check must not look like "up to date").
 #
 # -Tag vX.Y.Z: compare an older release instead of the latest one.
+# -Buildable:  ask what a build started now would ship, not what upstream has
+#              announced: Apache from Apache Lounge (follows apache.org within
+#              days) and MySQL only when its download is there (a tag can
+#              appear before it).
+# -PassThru:   also return an object for a calling script: Release (tag of the
+#              compared release) and Updates (rows of the components with an
+#              update: Component, Shipped, Upstream, State).
 param(
   [string]$Repo = 'Wolfram33/winpacho',
   [ValidatePattern('^(v\d+\.\d+\.\d+)?$')]
-  [string]$Tag = ''
+  [string]$Tag = '',
+  [switch]$Buildable,
+  [switch]$PassThru
 )
 $ErrorActionPreference = 'Stop'
 $UA = @{ 'User-Agent' = 'winpacho-upstream-watch' }
@@ -62,12 +71,17 @@ $upstream = [ordered]@{}
 $errors = @()
 
 try {
-  # apache.org is the authority for releases (Apache Lounge builds follow
-  # within days; build-bundle.ps1 takes the newest Lounge build)
-  $html = Get-Text 'https://httpd.apache.org/download.cgi'
-  $patch = [regex]::Matches($html, 'httpd-2\.4\.(\d+)\.tar') | ForEach-Object { [int]$_.Groups[1].Value } |
-    Sort-Object -Descending | Select-Object -First 1
-  if ($null -eq $patch) { throw 'no httpd-2.4.x tarball on the download page' }
+  if ($Buildable) {
+    . "$PSScriptRoot/apache-lounge.ps1"
+    $patch = (Get-ApacheLoungeBuild).Patch
+  } else {
+    # apache.org is the authority for releases (Apache Lounge builds follow
+    # within days; build-bundle.ps1 takes the newest Lounge build)
+    $html = Get-Text 'https://httpd.apache.org/download.cgi'
+    $patch = [regex]::Matches($html, 'httpd-2\.4\.(\d+)\.tar') | ForEach-Object { [int]$_.Groups[1].Value } |
+      Sort-Object -Descending | Select-Object -First 1
+    if ($null -eq $patch) { throw 'no httpd-2.4.x tarball on the download page' }
+  }
   $upstream['Apache'] = "2.4.$patch"
 } catch { $errors += "Apache: $($_.Exception.Message)" }
 
@@ -99,6 +113,12 @@ try {
   $patch = $tags | ForEach-Object { if ($_ -match 'refs/tags/mysql-8\.4\.(\d+)$') { [int]$Matches[1] } } |
     Sort-Object -Descending | Select-Object -First 1
   if ($null -eq $patch) { throw 'no mysql-8.4.x tag found' }
+  if ($Buildable) {
+    # Same file as package-mysql-module.ps1 downloads
+    $zipUrl = "https://cdn.mysql.com/Downloads/MySQL-8.4/mysql-8.4.$patch-winx64.zip"
+    try { $null = Invoke-WebRequest -Uri $zipUrl -Method Head -Headers $UA -TimeoutSec $TIMEOUT_SEC -UseBasicParsing }
+    catch { throw "8.4.$patch is tagged, but its download is not there yet ($zipUrl): $($_.Exception.Message) - run again in a few days" }
+  }
   $upstream['MySQL 8.4'] = "8.4.$patch"
 } catch { $errors += "MySQL: $($_.Exception.Message)" }
 
@@ -109,6 +129,7 @@ try {
 } catch { $errors += "Adminer: $($_.Exception.Message)" }
 
 # --- Compare and report --------------------------------------------------------
+$STATE_UPDATE = 'UPDATE AVAILABLE'
 $rows = @()
 $updates = 0
 foreach ($name in $shipped.Keys) {
@@ -120,7 +141,7 @@ foreach ($name in $shipped.Keys) {
   elseif (-not $new) { $state = 'check failed' }
   else {
     # Uncaught, this would exit 1 and read as "updates available"
-    try { if ((ConvertTo-Version $new) -gt (ConvertTo-Version $have)) { $state = 'UPDATE AVAILABLE'; $updates++ } }
+    try { if ((ConvertTo-Version $new) -gt (ConvertTo-Version $have)) { $state = $STATE_UPDATE; $updates++ } }
     catch { $state = 'check failed'; $errors += "$name`: cannot compare versions '$have' and '$new'" }
   }
   $rows += [pscustomobject]@{ Component = $name; Shipped = $have; Upstream = $new; State = $state }
@@ -129,14 +150,18 @@ foreach ($name in $shipped.Keys) {
 $report = @("## Upstream versions vs. release $($release.tag_name)", '',
             '| Component | Shipped | Upstream | State |', '|---|---|---|---|')
 $report += $rows | ForEach-Object { "| $($_.Component) | $($_.Shipped) | $($_.Upstream) | $($_.State) |" }
-if ($updates) {
-  $report += '', "**$updates update(s) available.** Bump WinpachoController/reload_version.inc, commit, tag and push -",
-             'the build fetches the newest versions. For a new Apache also raise $MinApachePatch in scripts/build-bundle.ps1.'
+# With -PassThru the calling script says what happens next
+if ($updates -and -not $PassThru) {
+  $report += '', "**$updates update(s) available.** The monthly auto release (1st of the month) ships them by itself.",
+             'To release now: GitHub > Actions > "Monthly auto release" > Run workflow. It raises the PATCH version,',
+             'tags it and starts the release build. Apache appears here when apache.org announces it; the release',
+             'waits until Apache Lounge has built it (within days).'
 }
 if ($errors) { $report += '', '**Checks that failed:**'; $report += $errors | ForEach-Object { "- $_" } }
 
 $report | ForEach-Object { Write-Host $_ }
 if ($env:GITHUB_STEP_SUMMARY) { $report | Add-Content -Path $env:GITHUB_STEP_SUMMARY }
+if ($PassThru) { [pscustomobject]@{ Release = $release.tag_name; Updates = @($rows | Where-Object State -eq $STATE_UPDATE) } }
 
 if ($errors) { exit 2 }
 if ($updates) { exit 1 }

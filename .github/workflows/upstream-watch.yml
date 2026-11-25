@@ -1,6 +1,8 @@
 # Weekly check whether Apache, PHP, MariaDB, MySQL or Adminer have newer versions than
-# the latest release ships. A failed run (GitHub mails it) means: build a new
-# release - see the run summary for which component and what to do.
+# the latest release ships. A failed run (GitHub mails it) is the early notice
+# that an update is out - see the run summary for which component. The monthly
+# auto release (auto-release.yml) ships it on the 1st; for a security update
+# start that workflow by hand right away.
 name: Upstream watch
 
 on:
