@@ -67,7 +67,7 @@ if (-not (Test-Path "$root\UniController.exe")) { throw "Unexpected base package
 # Floor for the patch level: a lower find means the scrape fell back to an
 # outdated build (releases up to 1.3.12 shipped 2.4.66 this way) - fail loudly.
 # scripts/auto-release.ps1 raises it with every new Apache it releases.
-$MinApachePatch = 70
+$MinApachePatch = 71
 Write-Host '==> Checking for latest Apache Lounge build'
 . "$PSScriptRoot\apache-lounge.ps1"
 $found = Get-ApacheLoungeBuild
